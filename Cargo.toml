@@ -6,7 +6,9 @@ license-file = "LICENSE"
 readme = "README.md"
 description = "Asynchronous and easy-to-use high level ssh client library for rust."
 keywords = ["async", "asynchronous", "ssh", "ssh2", "ssh client", "ssh2 client"]
+repository = "https://github.com/Miyoshi-Ryota/async-ssh2-tokio"
 categories = ["network-programming"]
+authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
