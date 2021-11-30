@@ -11,3 +11,9 @@ categories = ["network-programming"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+thrussh = "0.33.5"
+thrussh-keys = "0.21.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+tokio = "1.14.0"
