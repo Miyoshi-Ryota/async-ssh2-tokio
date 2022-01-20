@@ -1,4 +1,6 @@
 # async-ssh2-tokio
+![Unit Test Status](https://github.com/Miyoshi-Ryota/async-ssh2-tokio/actions/workflows/ci.yml/badge.svg)
+![Lint Status](https://github.com/Miyoshi-Ryota/async-ssh2-tokio/actions/workflows/super_lint.yml/badge.svg)
 
 This library, async-ssh2-tokio, is a asynchronous and super-easy-to-use high level ssh client library for rust.
 This library is powered by thrussh.
