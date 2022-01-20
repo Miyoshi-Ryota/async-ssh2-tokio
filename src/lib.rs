@@ -6,7 +6,7 @@
 //! * execute command to remote host
 //!
 //! # Install
-//! ```no_run
+//! ```ignore
 //! [dependencies]
 //! tokio = "1"
 //! async-ssh2-tokio = "0.1"
@@ -17,15 +17,15 @@
 //! use async_ssh2_tokio::error::AsyncSsh2Error;
 //! #[tokio::main]
 //! async fn main() -> Result<(), AsyncSsh2Error> {
-//!     let username = "username".to_string();
+//!     let username = "root".to_string();
 //!     // Key auth is under development. If you need this, then create github issue or contribute this.
-//!     let password = AuthMethod::Password("password".to_string());
+//!     let password = AuthMethod::Password("root".to_string());
 //!
 //!     // If you want specify host by ip, then
 //!     // use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 //!     // let localhost_v4 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 //!     // let host = Host::IpAddress(localhost_v4);
-//!     let host = Host::Hostname("localhost".to_string();
+//!     let host = Host::Hostname("10.10.10.2".to_string());
 //!     let port = 22;
 //!     let mut client = Client::new(host, port, username, password);
 //!     client.connect().await?;
