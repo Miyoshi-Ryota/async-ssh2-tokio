@@ -1,0 +1,25 @@
+version: "2.3"
+services:
+  ssh-server:
+    image: rastasheep/ubuntu-sshd
+    container_name: ssh-server
+    networks:
+      ssh-network:
+        ipv4_address: 10.10.10.2
+  async-ssh2-tokio:
+    build: # Change build context to be copy async-ssh2-tokio which is located parent directory.
+      context: ../
+      dockerfile: ./tests/async-ssh2-tokio/Dockerfile
+    tty: true
+    networks:
+      ssh-network:
+        ipv4_address: 10.10.10.3
+    depends_on:
+      - ssh-server
+
+networks:
+  ssh-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.10.0/24
