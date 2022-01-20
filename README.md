@@ -29,7 +29,7 @@ async fn main() -> Result<(), AsyncSsh2Error> {
     // use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     // let localhost_v4 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
     // let host = Host::IpAddress(localhost_v4);
-    let host = Host::Hostname("localhost".to_string();
+    let host = Host::Hostname("localhost".to_string());
     let port = 22;
     let mut client = Client::new(host, port, username, password);
     client.connect().await?;
