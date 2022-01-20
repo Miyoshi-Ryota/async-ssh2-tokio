@@ -146,10 +146,10 @@ mod tests {
     #[tokio::test]
     async fn connect_with_password() {
         let mut client = Client::new(
-            Host::Hostname("localhost".to_string()),
+            Host::Hostname("10.10.10.2".to_string()),
             22,
-            "xxx".to_string(),
-            AuthMethod::Password("xxx".to_string()),
+            "root".to_string(),
+            AuthMethod::Password("root".to_string()),
         );
         client.connect().await.unwrap();
         assert!(client.channel.is_some());
@@ -158,10 +158,10 @@ mod tests {
     #[tokio::test]
     async fn execute_command() {
         let mut client = Client::new(
-            Host::Hostname("localhost".to_string()),
+            Host::Hostname("10.10.10.2".to_string()),
             22,
-            "xxx".to_string(),
-            AuthMethod::Password("xxx".to_string()),
+            "root".to_string(),
+            AuthMethod::Password("root".to_string()),
         );
         client.connect().await.unwrap();
         let output = client.execute("echo test!!!").await.unwrap().output;
@@ -175,10 +175,10 @@ mod tests {
     #[tokio::test]
     async fn connect_with_wrong_password() {
         let mut client = Client::new(
-            Host::Hostname("localhost".to_string()),
+            Host::Hostname("10.10.10.2".to_string()),
             22,
-            "xxx".to_string(),
-            AuthMethod::Password("xxx".to_string()),
+            "root".to_string(),
+            AuthMethod::Password("wrongpassword".to_string()),
         );
         let res = client.connect().await;
         println!("{:?}", res);
@@ -188,10 +188,10 @@ mod tests {
     #[tokio::test]
     async fn connect_to_wrong_port() {
         let mut client = Client::new(
-            Host::Hostname("localhost".to_string()),
+            Host::Hostname("10.10.10.2".to_string()),
             23,
-            "xxx".to_string(),
-            AuthMethod::Password("xxx".to_string()),
+            "root".to_string(),
+            AuthMethod::Password("root".to_string()),
         );
         let res = client.connect().await;
         println!("{:?}", res);
@@ -199,6 +199,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn connect_to_wrong_host() {
         let mut client = Client::new(
             Host::Hostname("172.16.0.6".to_string()),
