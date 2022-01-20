@@ -166,10 +166,7 @@ mod tests {
         client.connect().await.unwrap();
         let output = client.execute("echo test!!!").await.unwrap().output;
         println!("{:?}", output);
-        assert_eq!(
-            "test!!!\n",
-            output
-        );
+        assert_eq!("test!!!\n", output);
     }
 
     #[tokio::test]
