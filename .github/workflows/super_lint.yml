@@ -19,6 +19,7 @@ jobs:
       - name: Lint Code Base
         uses: github/super-linter@v4
         env:
+          VALIDATE_JSCPD: false
           VALIDATE_RUST_2015: false
           VALIDATE_RUST_2018: false
           DEFAULT_BRANCH: main
