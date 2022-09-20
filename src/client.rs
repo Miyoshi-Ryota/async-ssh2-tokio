@@ -31,8 +31,7 @@ pub enum AuthMethod {
 }
 
 pub struct Client {
-    host: Host,
-    port: usize,
+    addr: String,
     username: String,
     auth: AuthMethod,
     config: Arc<russh::client::Config>,
@@ -40,12 +39,11 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(host: Host, port: usize, username: String, auth: AuthMethod) -> Self {
+    pub fn new(addr: &str, username: String, auth: AuthMethod) -> Self {
         let config = russh::client::Config::default();
         let config = Arc::new(config);
         Self {
-            host,
-            port,
+            addr: addr.into(),
             username,
             auth,
             config,
@@ -56,13 +54,13 @@ impl Client {
     pub async fn connect(&mut self) -> Result<(), AsyncSsh2Error> {
         let handler = Handler::new();
         let config = self.config.clone();
-        let addr = self.host.to_string() + ":" + &self.port.to_string();
+        let addr = &self.addr;
         let username = self.username.clone();
         let auth = self.auth.clone();
         let mut handle = russh::client::connect(
             config,
             addr.parse()
-                .map_err(|_| AsyncSsh2Error::AddressWrong(addr))?,
+                .map_err(|_| AsyncSsh2Error::AddressWrong(addr.into()))?,
             handler,
         )
         .await?;

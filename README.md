@@ -25,13 +25,7 @@ async fn main() -> Result<(), AsyncSsh2Error> {
     // Key auth is under development. If you need this, then create github issue or contribute this.
     let password = AuthMethod::Password("password".to_string());
 
-    // If you want specify host by ip, then
-    // use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-    // let localhost_v4 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-    // let host = Host::IpAddress(localhost_v4);
-    let host = Host::Hostname("localhost".to_string());
-    let port = 22;
-    let mut client = Client::new(host, port, username, password);
+    let mut client = Client::new("localhost:22", username, password);
     client.connect().await?;
     let result = client.execute("echo test!!!").await?;
     assert_eq!(result.output, "test!!!\n");
