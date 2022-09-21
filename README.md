@@ -13,7 +13,7 @@ This library is powered by thrussh.
 ```rust
 [dependencies]
 tokio = "1"
-async-ssh2-tokio = "0.1"
+async-ssh2-tokio = "0.2.1"
 ```
 ## Example
 ```rust
