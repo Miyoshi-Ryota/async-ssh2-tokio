@@ -1,4 +1,4 @@
-FROM rust:1.58.0
+FROM rust:1.63.0
 
 WORKDIR /async-ssh2-tokio
 COPY . .

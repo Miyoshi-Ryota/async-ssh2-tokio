@@ -147,8 +147,7 @@ mod tests {
     #[tokio::test]
     async fn connect_with_password() {
         let mut client = Client::new(
-            Host::Hostname("10.10.10.2".to_string()),
-            22,
+            "10.10.10.2:22",
             "root".to_string(),
             AuthMethod::Password("root".to_string()),
         );
@@ -159,8 +158,7 @@ mod tests {
     #[tokio::test]
     async fn execute_command() {
         let mut client = Client::new(
-            Host::Hostname("10.10.10.2".to_string()),
-            22,
+            "10.10.10.2:22",
             "root".to_string(),
             AuthMethod::Password("root".to_string()),
         );
@@ -173,8 +171,7 @@ mod tests {
     #[tokio::test]
     async fn connect_with_wrong_password() {
         let mut client = Client::new(
-            Host::Hostname("10.10.10.2".to_string()),
-            22,
+            "10.10.10.2:22",
             "root".to_string(),
             AuthMethod::Password("wrongpassword".to_string()),
         );
@@ -186,8 +183,7 @@ mod tests {
     #[tokio::test]
     async fn connect_to_wrong_port() {
         let mut client = Client::new(
-            Host::Hostname("10.10.10.2".to_string()),
-            23,
+            "10.10.10.2:23",
             "root".to_string(),
             AuthMethod::Password("root".to_string()),
         );
@@ -200,8 +196,7 @@ mod tests {
     #[ignore]
     async fn connect_to_wrong_host() {
         let mut client = Client::new(
-            Host::Hostname("172.16.0.6".to_string()),
-            22,
+            "172.16.0.6:22",
             "xxx".to_string(),
             AuthMethod::Password("xxx".to_string()),
         );
