@@ -1,5 +1,5 @@
-extern crate thrussh;
-extern crate thrussh_keys;
+extern crate russh;
+extern crate russh_keys;
 use crate::error::AsyncSsh2Error;
 use std::fmt;
 use std::io::Write;
@@ -31,21 +31,19 @@ pub enum AuthMethod {
 }
 
 pub struct Client {
-    host: Host,
-    port: usize,
+    addr: String,
     username: String,
     auth: AuthMethod,
-    config: Arc<thrussh::client::Config>,
-    channel: Option<thrussh::client::Channel>,
+    config: Arc<russh::client::Config>,
+    channel: Option<russh::Channel<russh::client::Msg>>,
 }
 
 impl Client {
-    pub fn new(host: Host, port: usize, username: String, auth: AuthMethod) -> Self {
-        let config = thrussh::client::Config::default();
+    pub fn new(addr: &str, username: String, auth: AuthMethod) -> Self {
+        let config = russh::client::Config::default();
         let config = Arc::new(config);
         Self {
-            host,
-            port,
+            addr: addr.into(),
             username,
             auth,
             config,
@@ -56,10 +54,16 @@ impl Client {
     pub async fn connect(&mut self) -> Result<(), AsyncSsh2Error> {
         let handler = Handler::new();
         let config = self.config.clone();
-        let addr = self.host.to_string() + ":" + &self.port.to_string();
+        let addr = &self.addr;
         let username = self.username.clone();
         let auth = self.auth.clone();
-        let mut handle = thrussh::client::connect(config, addr, handler).await?;
+        let mut handle = russh::client::connect(
+            config,
+            addr.parse()
+                .map_err(|_| AsyncSsh2Error::AddressWrong(addr.into()))?,
+            handler,
+        )
+        .await?;
         let AuthMethod::Password(password) = auth;
         if handle.authenticate_password(username, password).await? {
             self.channel = Some(handle.channel_open_session().await?);
@@ -78,10 +82,10 @@ impl Client {
             channel.exec(true, command).await?;
             while let Some(msg) = channel.wait().await {
                 match msg {
-                    thrussh::ChannelMsg::Data { ref data } => {
+                    russh::ChannelMsg::Data { ref data } => {
                         command_execute_result_byte.write_all(data).unwrap()
                     }
-                    thrussh::ChannelMsg::ExitStatus { exit_status } => {
+                    russh::ChannelMsg::ExitStatus { exit_status } => {
                         let result = CommandExecutedResult::new(
                             String::from_utf8_lossy(&command_execute_result_byte).to_string(),
                             exit_status,
@@ -121,21 +125,18 @@ impl Handler {
     }
 }
 
-impl thrussh::client::Handler for Handler {
+impl russh::client::Handler for Handler {
     type Error = AsyncSsh2Error;
-    type FutureUnit = std::future::Ready<Result<(Self, thrussh::client::Session), Self::Error>>;
+    type FutureUnit = std::future::Ready<Result<(Self, russh::client::Session), Self::Error>>;
     type FutureBool = std::future::Ready<Result<(Self, bool), Self::Error>>;
 
     fn finished_bool(self, b: bool) -> Self::FutureBool {
         std::future::ready(Ok((self, b)))
     }
-    fn finished(self, session: thrussh::client::Session) -> Self::FutureUnit {
+    fn finished(self, session: russh::client::Session) -> Self::FutureUnit {
         std::future::ready(Ok((self, session)))
     }
-    fn check_server_key(
-        self,
-        _server_public_key: &thrussh_keys::key::PublicKey,
-    ) -> Self::FutureBool {
+    fn check_server_key(self, _server_public_key: &russh_keys::key::PublicKey) -> Self::FutureBool {
         self.finished_bool(true)
     }
 }
