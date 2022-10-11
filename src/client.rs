@@ -1,6 +1,7 @@
 extern crate russh;
 extern crate russh_keys;
 use crate::error::AsyncSsh2Error;
+use russh::client::Config;
 use std::fmt;
 use std::io::Write;
 use std::net::IpAddr;
@@ -40,7 +41,10 @@ pub struct Client {
 
 impl Client {
     pub fn new(addr: &str, username: String, auth: AuthMethod) -> Self {
-        let config = russh::client::Config::default();
+        Self::with_config(addr, username, auth, Config::default())
+    }
+
+    pub fn with_config(addr: &str, username: String, auth: AuthMethod, config: Config) -> Self {
         let config = Arc::new(config);
         Self {
             addr: addr.into(),
