@@ -9,7 +9,7 @@
 //! ```ignore
 //! [dependencies]
 //! tokio = "1"
-//! async-ssh2-tokio = "0.1"
+//! async-ssh2-tokio = "0.3.0"
 //! ```
 //! # Example
 //! ```
