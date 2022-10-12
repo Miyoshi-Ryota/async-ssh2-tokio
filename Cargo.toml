@@ -12,6 +12,9 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+openssl = ["russh/openssl"]
+
 [dependencies]
 russh = "0.34.0-beta.16"
 russh-keys = "0.22.0-beta.7"
