@@ -20,7 +20,8 @@ pub struct Client {
     username: String,
     auth: AuthMethod,
     config: Arc<russh::client::Config>,
-    channel: Option<russh::Channel<russh::client::Msg>>,
+
+    connection_handle: Option<russh::client::Handle<Handler>>,
 }
 
 impl Client {
@@ -54,21 +55,22 @@ impl Client {
             username: username.to_string(),
             auth,
             config,
-            channel: None,
+            connection_handle: None,
         })
     }
 
     pub async fn connect(&mut self) -> Result<(), AsyncSsh2Error> {
+        // Connect
         let handler = Handler::new();
         let mut handle = russh::client::connect(self.config.clone(), self.addr, handler).await?;
 
-        let auth = self.auth.clone();
-        let AuthMethod::Password(password) = auth;
-        if handle
+        // Authenticate
+        let AuthMethod::Password(password) = self.auth.clone();
+        let is_authentificated = handle
             .authenticate_password(&self.username, password)
-            .await?
-        {
-            self.channel = Some(handle.channel_open_session().await?);
+            .await?;
+        if is_authentificated {
+            self.connection_handle = Some(handle);
             Ok(())
         } else {
             Err(AsyncSsh2Error::PasswordWrong)
@@ -79,17 +81,17 @@ impl Client {
         &mut self,
         command: &str,
     ) -> Result<CommandExecutedResult, AsyncSsh2Error> {
-        let mut command_execute_result_byte = vec![];
-        if let Some(channel) = self.channel.as_mut() {
+        if let Some(handle) = self.connection_handle.as_mut() {
+            let mut receive_buffer = vec![];
+            let mut channel = handle.channel_open_session().await?;
             channel.exec(true, command).await?;
+
             while let Some(msg) = channel.wait().await {
                 match msg {
-                    russh::ChannelMsg::Data { ref data } => {
-                        command_execute_result_byte.write_all(data).unwrap()
-                    }
+                    russh::ChannelMsg::Data { ref data } => receive_buffer.write_all(data).unwrap(),
                     russh::ChannelMsg::ExitStatus { exit_status } => {
                         let result = CommandExecutedResult::new(
-                            String::from_utf8_lossy(&command_execute_result_byte).to_string(),
+                            String::from_utf8_lossy(&receive_buffer).to_string(),
                             exit_status,
                         );
                         return Ok(result);
@@ -99,7 +101,7 @@ impl Client {
             }
         }
 
-        Err(AsyncSsh2Error::PasswordWrong)
+        Err(AsyncSsh2Error::NotConnected)
     }
 }
 
@@ -145,31 +147,52 @@ impl russh::client::Handler for Handler {
 
 #[cfg(test)]
 mod tests {
+    async fn establish_test_host_connection() -> Client {
+        let mut client = Client::new(
+            (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+        )
+        .expect("Accept proper ip address");
+
+        client
+            .connect()
+            .await
+            .expect("Connection/Authentification failed");
+
+        client
+    }
+
     use crate::client::*;
     #[tokio::test]
     async fn connect_with_password() {
-        let mut client = Client::new(
-            (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
-        )
-        .expect("Accept proper ip address");
-        client.connect().await.unwrap();
-        assert!(client.channel.is_some());
+        let client = establish_test_host_connection().await;
+        assert!(client.connection_handle.is_some());
     }
 
     #[tokio::test]
-    async fn execute_command() {
-        let mut client = Client::new(
-            (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
-        )
-        .expect("Accept proper ip address");
-        client.connect().await.unwrap();
+    async fn execute_command_result() {
+        let mut client = establish_test_host_connection().await;
+        let output = client.execute("echo test!!!").await.unwrap();
+        assert_eq!("test!!!\n", output.output);
+        assert_eq!(0, output.exit_status);
+    }
+
+    #[tokio::test]
+    async fn execute_command_status() {
+        let mut client = establish_test_host_connection().await;
+        let output = client.execute("exit 42").await.unwrap();
+        assert_eq!(42, output.exit_status);
+    }
+
+    #[tokio::test]
+    async fn execute_multiple_commands() {
+        let mut client = establish_test_host_connection().await;
         let output = client.execute("echo test!!!").await.unwrap().output;
-        println!("{:?}", output);
         assert_eq!("test!!!\n", output);
+
+        let output = client.execute("echo Hello World").await.unwrap().output;
+        assert_eq!("Hello World\n", output);
     }
 
     #[tokio::test]
@@ -181,8 +204,17 @@ mod tests {
         )
         .expect("Accept proper ip address");
         let res = client.connect().await;
-        println!("{:?}", res);
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn invalid_address() {
+        let no_client = Client::new(
+            "this is definitely not an address",
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password("hopefully the wrong password"),
+        );
+        assert!(no_client.is_err());
     }
 
     #[tokio::test]
@@ -194,7 +226,6 @@ mod tests {
         )
         .expect("Accept proper ip address");
         let res = client.connect().await;
-        println!("{:?}", res);
         assert!(res.is_err());
     }
 
@@ -204,7 +235,6 @@ mod tests {
         let mut client = Client::new("172.16.0.6:22", "xxx", AuthMethod::with_password("xxx"))
             .expect("Accept proper ip address");
         let res = client.connect().await;
-        println!("{:?}", res);
         assert!(res.is_err());
     }
 }
