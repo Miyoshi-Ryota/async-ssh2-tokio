@@ -1,38 +1,22 @@
-extern crate russh;
-extern crate russh_keys;
 use crate::error::AsyncSsh2Error;
 use russh::client::Config;
-use std::fmt;
-use std::io::Write;
-use std::net::IpAddr;
+use std::io::{self, Write};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Host {
-    Hostname(String),
-    IpAddress(IpAddr),
-}
-
-impl fmt::Display for Host {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Host::Hostname(host) => host.to_string(),
-                Host::IpAddress(ip) => ip.to_string(),
-            }
-        )
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AuthMethod {
     Password(String),
 }
 
+impl AuthMethod {
+    pub fn with_password(password: &str) -> Self {
+        Self::Password(password.to_string())
+    }
+}
+
 pub struct Client {
-    addr: String,
+    addr: SocketAddr,
     username: String,
     auth: AuthMethod,
     config: Arc<russh::client::Config>,
@@ -40,36 +24,50 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(addr: &str, username: String, auth: AuthMethod) -> Self {
+    pub fn new(
+        addr: impl ToSocketAddrs,
+        username: &str,
+        auth: AuthMethod,
+    ) -> Result<Self, AsyncSsh2Error> {
         Self::with_config(addr, username, auth, Config::default())
     }
 
-    pub fn with_config(addr: &str, username: String, auth: AuthMethod, config: Config) -> Self {
+    pub fn with_config(
+        addr: impl ToSocketAddrs,
+        username: &str,
+        auth: AuthMethod,
+        config: Config,
+    ) -> Result<Self, AsyncSsh2Error> {
         let config = Arc::new(config);
-        Self {
-            addr: addr.into(),
-            username,
+        let addr = addr
+            .to_socket_addrs()
+            .map_err(AsyncSsh2Error::AddressInvalid)?
+            .next()
+            .ok_or_else(|| {
+                AsyncSsh2Error::AddressInvalid(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No valid address was provided",
+                ))
+            })?;
+        Ok(Self {
+            addr,
+            username: username.to_string(),
             auth,
             config,
             channel: None,
-        }
+        })
     }
 
     pub async fn connect(&mut self) -> Result<(), AsyncSsh2Error> {
         let handler = Handler::new();
-        let config = self.config.clone();
-        let addr = &self.addr;
-        let username = self.username.clone();
+        let mut handle = russh::client::connect(self.config.clone(), self.addr, handler).await?;
+
         let auth = self.auth.clone();
-        let mut handle = russh::client::connect(
-            config,
-            addr.parse()
-                .map_err(|_| AsyncSsh2Error::AddressWrong(addr.into()))?,
-            handler,
-        )
-        .await?;
         let AuthMethod::Password(password) = auth;
-        if handle.authenticate_password(username, password).await? {
+        if handle
+            .authenticate_password(&self.username, password)
+            .await?
+        {
             self.channel = Some(handle.channel_open_session().await?);
             Ok(())
         } else {
@@ -151,10 +149,11 @@ mod tests {
     #[tokio::test]
     async fn connect_with_password() {
         let mut client = Client::new(
-            "10.10.10.2:22",
-            "root".to_string(),
-            AuthMethod::Password("root".to_string()),
-        );
+            (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+        )
+        .expect("Accept proper ip address");
         client.connect().await.unwrap();
         assert!(client.channel.is_some());
     }
@@ -162,10 +161,11 @@ mod tests {
     #[tokio::test]
     async fn execute_command() {
         let mut client = Client::new(
-            "10.10.10.2:22",
-            "root".to_string(),
-            AuthMethod::Password("root".to_string()),
-        );
+            (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+        )
+        .expect("Accept proper ip address");
         client.connect().await.unwrap();
         let output = client.execute("echo test!!!").await.unwrap().output;
         println!("{:?}", output);
@@ -175,10 +175,11 @@ mod tests {
     #[tokio::test]
     async fn connect_with_wrong_password() {
         let mut client = Client::new(
-            "10.10.10.2:22",
-            "root".to_string(),
-            AuthMethod::Password("wrongpassword".to_string()),
-        );
+            (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password("hopefully the wrong password"),
+        )
+        .expect("Accept proper ip address");
         let res = client.connect().await;
         println!("{:?}", res);
         assert!(res.is_err());
@@ -187,23 +188,21 @@ mod tests {
     #[tokio::test]
     async fn connect_to_wrong_port() {
         let mut client = Client::new(
-            "10.10.10.2:23",
-            "root".to_string(),
-            AuthMethod::Password("root".to_string()),
-        );
+            (env!("ASYNC_SSH2_TEST_HOST_IP"), 23),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+        )
+        .expect("Accept proper ip address");
         let res = client.connect().await;
         println!("{:?}", res);
         assert!(res.is_err());
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "This times out only after 20 seconds"]
     async fn connect_to_wrong_host() {
-        let mut client = Client::new(
-            "172.16.0.6:22",
-            "xxx".to_string(),
-            AuthMethod::Password("xxx".to_string()),
-        );
+        let mut client = Client::new("172.16.0.6:22", "xxx", AuthMethod::with_password("xxx"))
+            .expect("Accept proper ip address");
         let res = client.connect().await;
         println!("{:?}", res);
         assert!(res.is_err());

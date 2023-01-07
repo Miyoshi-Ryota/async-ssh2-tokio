@@ -9,22 +9,21 @@
 //! ```ignore
 //! [dependencies]
 //! tokio = "1"
-//! async-ssh2-tokio = "0.3.0"
+//! async-ssh2-tokio = "0.4.0"
 //! ```
 //! # Example
 //! ```
-//! use async_ssh2_tokio::client::{Client, Host, AuthMethod};
+//! use async_ssh2_tokio::client::{Client, AuthMethod};
 //! use async_ssh2_tokio::error::AsyncSsh2Error;
 //! #[tokio::main]
 //! async fn main() -> Result<(), AsyncSsh2Error> {
-//!     let username = "root".to_string();
-//!     // Key auth is under development. If you need this, then create github issue or contribute this.
-//!     let password = AuthMethod::Password("root".to_string());
+//!     // Only ip and password based authentification is implemented.
+//!     // If you need key based authentification, create github issue or contribute.
+//!     let mut client = Client::new(("10.10.10.2", 22), "root", AuthMethod::with_password("root"))?;
 //!
-//!     let mut client = Client::new("10.10.10.2:22", username, password);
 //!     client.connect().await?;
-//!     let result = client.execute("echo test!!!").await?;
-//!     assert_eq!(result.output, "test!!!\n");
+//!     let result = client.execute("echo Hello SSH").await?;
+//!     assert_eq!(result.output,  "Hello SSH\n");
 //!     Ok(())
 //! }
 //! ```
