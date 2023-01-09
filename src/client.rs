@@ -272,6 +272,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thousands_commands() {
+        let mut client = establish_test_host_connection().await;
+
+        for i in 0..1000 {
+            let res = client
+                .execute(&format!("echo {i}"))
+                .await
+                .expect(&format!("Execution failed in iteration {i}"));
+            assert_eq!(format!("{i}\n"), res.output);
+        }
+    }
+
+    #[tokio::test]
     async fn execute_multiple_context() {
         // This is maybe not expected behaviour, thus documenting this via a test is important.
         let mut client = establish_test_host_connection().await;
