@@ -1,32 +1,39 @@
 //! This library, async-ssh2-tokio, is a asynchronous and super-easy-to-use high level ssh client library for rust.
-//! This library is powered by thrussh.
+//! Powered by russh, a fork of thrussh.
+//!
+//! The heart of this library is [`client::Client`]. Use this for connection, authentification and execution.
 //!
 //! # Features
-//! * ssh host by password
-//! * execute command to remote host
+//! * Connect to SSH Host via IP and password.
+//! * Execute commands on the remote host
 //!
-//! # Install
-//! ```ignore
-//! [dependencies]
-//! tokio = "1"
-//! async-ssh2-tokio = "0.4.0"
-//! ```
 //! # Example
-//! ```
+//! ```no_run
 //! use async_ssh2_tokio::client::{Client, AuthMethod};
-//! use async_ssh2_tokio::error::AsyncSsh2Error;
 //! #[tokio::main]
-//! async fn main() -> Result<(), AsyncSsh2Error> {
+//! async fn main() -> Result<(), async_ssh2_tokio::Error> {
 //!     // Only ip and password based authentification is implemented.
 //!     // If you need key based authentification, create github issue or contribute.
-//!     let mut client = Client::new(("10.10.10.2", 22), "root", AuthMethod::with_password("root"))?;
+//!     let mut client = Client::connect(
+//!         ("10.10.10.2", 22),
+//!         "root",
+//!         AuthMethod::with_password("root"),
+//!     ).await?;
 //!
-//!     client.connect().await?;
 //!     let result = client.execute("echo Hello SSH").await?;
-//!     assert_eq!(result.output,  "Hello SSH\n");
+//!     assert_eq!(result.output, "Hello SSH\n");
+//!     assert_eq!(result.exit_status, 0);
+//!
+//!     let result = client.execute("echo Hello Again :)").await?;
+//!     assert_eq!(result.output, "Hello Again :)\n");
+//!     assert_eq!(result.exit_status, 0);
+//!
 //!     Ok(())
 //! }
 //! ```
 
 pub mod client;
 pub mod error;
+
+pub use client::{AuthMethod, Client};
+pub use error::Error;
