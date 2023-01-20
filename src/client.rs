@@ -19,12 +19,12 @@ impl AuthMethod {
     }
 }
 
-/// A ssh connection to a remote server.
+/// A ssh connection description to a remote server.
 ///
-/// After creating a `Client` by [`connect`]ing to a remote host,
-/// use [`execute`] to send commands and receive results through the connections.
+/// After creating a `Client` with [`new`], use [`execute`] to connect,
+/// authenticate, send commands and receive results.
 ///
-/// [`connect`]: Client::connect
+/// [`new`]: Client::new
 /// [`execute`]: Client::execute
 ///
 /// # Examples
@@ -33,11 +33,11 @@ impl AuthMethod {
 /// use async_ssh2_tokio::{Client, AuthMethod};
 /// #[tokio::main]
 /// async fn main() -> Result<(), async_ssh2_tokio::Error> {
-///     let mut client = Client::connect(
+///     let mut client = Client::new(
 ///         ("10.10.10.2", 22),
 ///         "root",
 ///         AuthMethod::with_password("root"),
-///     ).await?;
+///     )?;
 ///
 ///     let result = client.execute("echo Hello SSH").await?;
 ///     assert_eq!(result.output, "Hello SSH\n");
@@ -46,52 +46,73 @@ impl AuthMethod {
 ///     Ok(())
 /// }
 pub struct Client {
-    connection_handle: Handle<ClientHandler>,
+    addresses: Vec<SocketAddr>,
     username: String,
-    address: SocketAddr,
+    auth: AuthMethod,
+    config: Arc<russh::client::Config>,
 }
 
 impl Client {
-    /// Open a ssh connection to a remot host.
+    /// Defines a ssh connection to a remote host.
+    ///
+    /// This does not yet establish any connection, the only error this can return
+    /// is because of an illdefined `addr` argument.
     ///
     /// `addr` is an address of the remote host. Anything which implements
     /// [`ToSocketAddrs`] trait can be supplied for the address; see this trait
     /// documentation for concrete examples.
-    ///
     /// If `addr` yields multiple addresses, `connect` will be attempted with
     /// each of the addresses until a connection is successful.
     /// Authentification is tried on the first successful connection and the whole
     /// process aborted if this fails.
-    pub async fn connect(
+    pub fn new(
         addr: impl ToSocketAddrs,
         username: &str,
         auth: AuthMethod,
     ) -> Result<Self, crate::Error> {
-        Self::connect_with_config(addr, username, auth, Config::default()).await
+        Self::new_with_config(addr, username, auth, Config::default())
     }
 
-    /// Same as `connect`, but with the option to specify a non default
+    /// Same as `new`, but with the option to specify a non default
     /// [`russh::client::Config`].
-    pub async fn connect_with_config(
+    pub fn new_with_config(
         addr: impl ToSocketAddrs,
         username: &str,
         auth: AuthMethod,
         config: Config,
     ) -> Result<Self, crate::Error> {
+        let addresses: Vec<SocketAddr> = addr
+            .to_socket_addrs()
+            .map_err(crate::Error::AddressInvalid)?
+            .collect();
+        // This assertion is purely for early error reporting
+        if addresses.is_empty() {
+            return Err(crate::Error::AddressInvalid(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "could not resolve to any addresses",
+            )));
+        }
         let config = Arc::new(config);
+        let username = username.to_string();
+        Ok(Self {
+            addresses,
+            username,
+            auth,
+            config,
+        })
+    }
 
-        // Connection code inspired from std::net::TcpStream::connect and std::net::each_addr
-        let addrs = match addr.to_socket_addrs() {
-            Ok(addrs) => addrs,
-            Err(e) => return Err(crate::Error::AddressInvalid(e)),
-        };
+    /// Private function to establish and authenticate a connection.
+    async fn connect(&mut self) -> Result<(SocketAddr, Handle<ClientHandler>), crate::Error> {
+        // This error should never be returned, as the assertion in `new` garantees
+        // `self.addresses` is non-empty.
         let mut connect_res = Err(crate::Error::AddressInvalid(io::Error::new(
             io::ErrorKind::InvalidInput,
             "could not resolve to any addresses",
         )));
-        for addr in addrs {
-            let handler = ClientHandler::new();
-            match russh::client::connect(config.clone(), addr, handler).await {
+        // Connection code inspired from std::net::TcpStream::connect and std::net::each_addr
+        for &addr in self.addresses.iter() {
+            match russh::client::connect(self.config.clone(), addr, ClientHandler).await {
                 Ok(h) => {
                     connect_res = Ok((addr, h));
                     break;
@@ -100,28 +121,15 @@ impl Client {
             }
         }
         let (address, mut handle) = connect_res?;
-        let username = username.to_string();
 
-        Self::authenticate(&mut handle, &username, auth).await?;
-
-        Ok(Self {
-            connection_handle: handle,
-            username,
-            address,
-        })
-    }
-
-    /// This takes a handle and performs authentification with the given method.
-    async fn authenticate(
-        handle: &mut Handle<ClientHandler>,
-        username: &String,
-        auth: AuthMethod,
-    ) -> Result<(), crate::Error> {
-        match auth {
+        // Authenticate
+        match &self.auth {
             AuthMethod::Password(password) => {
-                let is_authentificated = handle.authenticate_password(username, password).await?;
+                let is_authentificated = handle
+                    .authenticate_password(&self.username, password)
+                    .await?;
                 if is_authentificated {
-                    Ok(())
+                    Ok((address, handle))
                 } else {
                     Err(crate::Error::PasswordWrong)
                 }
@@ -129,43 +137,41 @@ impl Client {
         }
     }
 
-    /// Execute a remote command via the ssh connection.
+    /// Execute a remote command by establishing and authenticating a ssh connection.
     ///
-    /// Returns both the stdout output and the exit code of the command,
+    /// Returns the stdout output and the exit code of the command, as well as
+    /// the actual address the command was executed on,
     /// packaged in a [`CommandExecutedResult`] struct.
     ///
-    /// Can be called multiple times, but every invocation is a new shell context.
-    /// Thus `cd`, setting variables and alike have no effect on future invocations.
+    /// Can be called multiple times, but every invocation is a new connection and thus
+    /// a new shell context.
+    /// Therefore `cd`, setting variables and alike have no effect on future invocations.
     pub async fn execute(&mut self, command: &str) -> Result<CommandExecutedResult, crate::Error> {
-        let mut receive_buffer = vec![];
-        let mut channel = self.connection_handle.channel_open_session().await?;
-        channel.exec(true, command).await?;
+        let (address, mut handle) = self.connect().await?;
+        let mut channel = handle.channel_open_session().await?;
 
+        let mut receive_buffer = vec![];
+
+        channel.exec(true, command).await?;
         while let Some(msg) = channel.wait().await {
             match msg {
                 russh::ChannelMsg::Data { ref data } => receive_buffer.write_all(data).unwrap(),
                 russh::ChannelMsg::ExitStatus { exit_status } => {
-                    let result = CommandExecutedResult::new(
-                        String::from_utf8_lossy(&receive_buffer).to_string(),
+                    let result = CommandExecutedResult {
+                        actual_address: address,
+                        output: String::from_utf8_lossy(&receive_buffer).to_string(),
                         exit_status,
-                    );
+                    };
                     return Ok(result);
                 }
                 _ => {}
             }
         }
 
+        // TODO: Should we disconnect or close the session here?
+        // handle.disconnect(russh::Disconnect::ByApplication, "", "");
+
         Err(crate::Error::CommandDidntExit)
-    }
-
-    /// A debugging function to get the username this client is connected as.
-    pub fn get_connection_username(&self) -> &String {
-        &self.username
-    }
-
-    /// A debugging function to get the address this client is connected to.
-    pub fn get_connection_address(&self) -> &SocketAddr {
-        &self.address
     }
 }
 
@@ -175,25 +181,12 @@ pub struct CommandExecutedResult {
     pub output: String,
     /// The unix exit status (`$?` in bash).
     pub exit_status: u32,
-}
-
-impl CommandExecutedResult {
-    fn new(output: String, exit_status: u32) -> Self {
-        Self {
-            output,
-            exit_status,
-        }
-    }
+    /// The actual address of the [`ToSocketAddrs`] argument that was used for the ssh connection.
+    pub actual_address: SocketAddr,
 }
 
 #[derive(Clone)]
 struct ClientHandler;
-
-impl ClientHandler {
-    fn new() -> Self {
-        Self {}
-    }
-}
 
 impl Handler for ClientHandler {
     type Error = crate::Error;
@@ -215,40 +208,45 @@ impl Handler for ClientHandler {
 mod tests {
     use crate::client::*;
 
-    async fn establish_test_host_connection() -> Client {
-        Client::connect(
+    async fn new_test_host_client() -> Client {
+        Client::new(
             (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
         )
-        .await
-        .expect("Connection/Authentification failed")
+        .expect("Address parsing failed")
     }
 
     #[tokio::test]
     async fn connect_with_password() {
-        let client = establish_test_host_connection().await;
-        assert_eq!(
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            client.get_connection_username(),
-        );
+        let mut client = new_test_host_client().await;
+        // Testing private interface here.
+        let (address, _handle) = client
+            .connect()
+            .await
+            .expect("Connection/Authentification failed");
+
         assert_eq!(
             concat!(env!("ASYNC_SSH2_TEST_HOST_IP"), ":22").parse(),
-            Ok(*client.get_connection_address()),
+            Ok(address),
         );
     }
 
     #[tokio::test]
     async fn execute_command_result() {
-        let mut client = establish_test_host_connection().await;
+        let mut client = new_test_host_client().await;
         let output = client.execute("echo test!!!").await.unwrap();
         assert_eq!("test!!!\n", output.output);
         assert_eq!(0, output.exit_status);
+        assert_eq!(
+            concat!(env!("ASYNC_SSH2_TEST_HOST_IP"), ":22").parse(),
+            Ok(output.actual_address),
+        );
     }
 
     #[tokio::test]
     async fn unicode_output() {
-        let mut client = establish_test_host_connection().await;
+        let mut client = new_test_host_client().await;
         let output = client.execute("echo To thḙ moon! 🚀").await.unwrap();
         assert_eq!("To thḙ moon! 🚀\n", output.output);
         assert_eq!(0, output.exit_status);
@@ -256,14 +254,14 @@ mod tests {
 
     #[tokio::test]
     async fn execute_command_status() {
-        let mut client = establish_test_host_connection().await;
+        let mut client = new_test_host_client().await;
         let output = client.execute("exit 42").await.unwrap();
         assert_eq!(42, output.exit_status);
     }
 
     #[tokio::test]
     async fn execute_multiple_commands() {
-        let mut client = establish_test_host_connection().await;
+        let mut client = new_test_host_client().await;
         let output = client.execute("echo test!!!").await.unwrap().output;
         assert_eq!("test!!!\n", output);
 
@@ -272,10 +270,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thousands_commands() {
-        let mut client = establish_test_host_connection().await;
+    async fn many_commands() {
+        let mut client = new_test_host_client().await;
 
-        for i in 0..1000 {
+        // Assert that the `maxSession` limit is not a problem.
+        // This time this takes is somewhere in the 30s range.
+        for i in 0..50 {
             let res = client
                 .execute(&format!("echo {i}"))
                 .await
@@ -287,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn execute_multiple_context() {
         // This is maybe not expected behaviour, thus documenting this via a test is important.
-        let mut client = establish_test_host_connection().await;
+        let mut client = new_test_host_client().await;
         let output = client
             .execute("export VARIABLE=42; echo $VARIABLE")
             .await
@@ -307,64 +307,82 @@ mod tests {
                 .parse()
                 .expect("invalid env var"),
         ];
-        let client = Client::connect(
+        let mut client = Client::new(
             &addresses[..],
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
         )
-        .await
-        .expect("Resolution to second address failed");
+        .expect("Address parsing failed");
+
+        let (address, _handle) = client
+            .connect()
+            .await
+            .expect("Connection/Authentification to second address failed");
 
         assert_eq!(
             concat!(env!("ASYNC_SSH2_TEST_HOST_IP"), ":22").parse(),
-            Ok(*client.get_connection_address()),
+            Ok(address),
         );
     }
 
     #[tokio::test]
     async fn connect_with_wrong_password() {
-        let error = Client::connect(
+        let mut client = Client::new(
             (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password("hopefully the wrong password"),
         )
-        .await
-        .err()
-        .expect("Client connected with wrong password");
+        .expect("Address parsing failed");
 
-        match error {
-            crate::Error::PasswordWrong => {}
-            _ => panic!("Wrong error type"),
-        }
+        let error = client
+            .connect()
+            .await
+            .err()
+            .expect("Connected with wrong password");
+
+        assert!(matches!(error, crate::Error::PasswordWrong));
     }
 
     #[tokio::test]
     async fn invalid_address() {
-        let no_client = Client::connect(
+        let no_client = Client::new(
             "this is definitely not an address",
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password("hopefully the wrong password"),
-        )
-        .await;
+        );
         assert!(no_client.is_err());
     }
 
     #[tokio::test]
     async fn connect_to_wrong_port() {
-        let no_client = Client::connect(
+        let mut client = Client::new(
             (env!("ASYNC_SSH2_TEST_HOST_IP"), 23),
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
         )
-        .await;
-        assert!(no_client.is_err());
+        .expect("Address parsing failed");
+
+        let error = client
+            .connect()
+            .await
+            .err()
+            .expect("Connected to wrong port");
+
+        assert!(matches!(error, crate::Error::SshError(_)));
     }
 
     #[tokio::test]
     #[ignore = "This times out only after 20 seconds"]
     async fn connect_to_wrong_host() {
-        let no_client =
-            Client::connect("172.16.0.6:22", "xxx", AuthMethod::with_password("xxx")).await;
-        assert!(no_client.is_err());
+        let mut client = Client::new("172.16.0.6:22", "xxx", AuthMethod::with_password("xxx"))
+            .expect("Address parsing failed");
+
+        let error = client
+            .connect()
+            .await
+            .err()
+            .expect("Connected to wrong port");
+
+        assert!(matches!(error, crate::Error::SshError(_)));
     }
 }
