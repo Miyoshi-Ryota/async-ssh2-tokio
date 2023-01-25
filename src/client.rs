@@ -142,6 +142,11 @@ impl Client {
     /// Returns the stdout output and the exit code of the command, as well as
     /// the actual address the command was executed on,
     /// packaged in a [`CommandExecutedResult`] struct.
+    /// If you need the stderr output, consider prefixing the command with a redirection,
+    /// e.g. `2>&1 echo foo >>/dev/stderr`. If you don't need the output, use something like
+    /// `echo foo >/dev/null`. Make sure your commands don't read from stdin and
+    /// exit after bounded time.
+    ///
     ///
     /// Can be called multiple times, but every invocation is a new connection and thus
     /// a new shell context.
@@ -267,6 +272,20 @@ mod tests {
 
         let output = client.execute("echo Hello World").await.unwrap().output;
         assert_eq!("Hello World\n", output);
+    }
+
+    #[tokio::test]
+    async fn stderr_redirection() {
+        let mut client = new_test_host_client().await;
+
+        let output = client.execute("echo foo >/dev/null").await.unwrap();
+        assert_eq!("", output.output);
+
+        let output = client.execute("echo foo >>/dev/stderr").await.unwrap();
+        assert_eq!("", output.output);
+
+        let output = client.execute("2>&1 echo foo >>/dev/stderr").await.unwrap();
+        assert_eq!("foo\n", output.output);
     }
 
     #[tokio::test]
