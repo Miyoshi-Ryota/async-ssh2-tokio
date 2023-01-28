@@ -1,6 +1,6 @@
 [package]
 name = "async-ssh2-tokio"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license-file = "LICENSE"
 readme = "README.md"
@@ -16,8 +16,8 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 openssl = ["russh/openssl"]
 
 [dependencies]
-russh = "0.34.0-beta.16"
-russh-keys = "0.22.0-beta.7"
+russh = "0.34.0"
+russh-keys = "0.22.0"
 thiserror = "1.0"
 
 [dev-dependencies]
