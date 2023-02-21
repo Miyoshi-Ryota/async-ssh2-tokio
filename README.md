@@ -18,7 +18,7 @@ for rust with the tokio runtime. Powered by the rust ssh implementation
 ```rust
 [dependencies]
 tokio = "1"
-async-ssh2-tokio = "0.4.0"
+async-ssh2-tokio = "0.5.0"
 ```
 
 ## Usage
@@ -28,11 +28,11 @@ use async_ssh2_tokio::client::{Client, AuthMethod};
 async fn main() -> Result<(), async_ssh2_tokio::Error> {
     // Only ip and password based authentification is implemented.
     // If you need key based authentification, create github issue or contribute.
-    let mut client = Client::new(
+    let mut client = Client::connect(
         ("10.10.10.2", 22),
         "root",
         AuthMethod::with_password("root"),
-    )?;
+    ).await?;
 
     let result = client.execute("echo Hello SSH").await?;
     assert_eq!(result.output, "Hello SSH\n");

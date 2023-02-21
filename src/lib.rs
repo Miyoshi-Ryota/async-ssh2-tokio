@@ -16,11 +16,11 @@
 //! async fn main() -> Result<(), async_ssh2_tokio::Error> {
 //!     // Only ip and password based authentification is implemented.
 //!     // If you need key based authentification, create github issue or contribute.
-//!     let mut client = Client::new(
+//!     let mut client = Client::connect(
 //!         ("10.10.10.2", 22),
 //!         "root",
 //!         AuthMethod::with_password("root"),
-//!     )?;
+//!     ).await?;
 //!
 //!     let result = client.execute("echo Hello SSH").await?;
 //!     assert_eq!(result.output, "Hello SSH\n");
