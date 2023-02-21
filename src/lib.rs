@@ -5,7 +5,7 @@
 //! The heart of this library is [`client::Client`]. Use this for connection, authentification and execution.
 //!
 //! # Features
-//! * Connect to a SSH Host via IP and password.
+//! * Connect to a SSH Host via IP and password
 //! * Execute commands on the remote host
 //! * Get the stdout and exit code of the command
 //!
