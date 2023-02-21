@@ -1,8 +1,8 @@
+use async_trait::async_trait;
 use russh::client::{Config, Handle, Handler};
 use std::io::{self, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
-use async_trait::async_trait;
 
 /// An authentification token, currently only by password.
 ///
@@ -53,7 +53,7 @@ pub struct Client {
 }
 
 impl Client {
-    /// Open a ssh connection to a remot host.
+    /// Open a ssh connection to a remote host.
     ///
     /// `addr` is an address of the remote host. Anything which implements
     /// [`ToSocketAddrs`] trait can be supplied for the address; see this trait
@@ -91,7 +91,7 @@ impl Client {
             "could not resolve to any addresses",
         )));
         for addr in addrs {
-            let handler = ClientHandler::new();
+            let handler = ClientHandler {};
             match russh::client::connect(config.clone(), addr, handler).await {
                 Ok(h) => {
                     connect_res = Ok((addr, h));
@@ -151,10 +151,10 @@ impl Client {
             match msg {
                 russh::ChannelMsg::Data { ref data } => receive_buffer.write_all(data).unwrap(),
                 russh::ChannelMsg::ExitStatus { exit_status } => {
-                    let result = CommandExecutedResult::new(
-                        String::from_utf8_lossy(&receive_buffer).to_string(),
+                    let result = CommandExecutedResult {
+                        output: String::from_utf8_lossy(&receive_buffer).to_string(),
                         exit_status,
-                    );
+                    };
                     return Ok(result);
                 }
                 _ => {}
@@ -183,23 +183,8 @@ pub struct CommandExecutedResult {
     pub exit_status: u32,
 }
 
-impl CommandExecutedResult {
-    fn new(output: String, exit_status: u32) -> Self {
-        Self {
-            output,
-            exit_status,
-        }
-    }
-}
-
 #[derive(Clone)]
 struct ClientHandler;
-
-impl ClientHandler {
-    fn new() -> Self {
-        Self {}
-    }
-}
 
 #[async_trait]
 impl Handler for ClientHandler {

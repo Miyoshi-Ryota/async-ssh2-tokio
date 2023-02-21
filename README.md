@@ -1,17 +1,18 @@
 # async-ssh2-tokio
 ![Unit Test Status](https://github.com/Miyoshi-Ryota/async-ssh2-tokio/actions/workflows/ci.yml/badge.svg)
 ![Lint Status](https://github.com/Miyoshi-Ryota/async-ssh2-tokio/actions/workflows/super_lint.yml/badge.svg)
-
-This library is a asynchronous and easy-to-use high level ssh client library
-for rust with the tokio runtime. Powered by russh.
-
 [Docs.rs](https://docs.rs/async-ssh2-tokio/latest/async_ssh2_tokio/),
 [Crates.io](https://crates.io/crates/async-ssh2-tokio)
 
+This library is an asynchronous and easy-to-use high level ssh client library
+for rust with the tokio runtime. Powered by the rust ssh implementation
+[russh](https://github.com/warp-tech/russh).
+
 
 ## Features
-* Connect to SSH Host via IP and password.
+* Connect to a SSH Host via IP and password
 * Execute commands on the remote host
+* Get the stdout and exit code of the command
 
 ## Install
 ```rust
@@ -53,4 +54,4 @@ or set the following environment variables for a working ssh host:
 * `ASYNC_SSH2_TEST_HOST_USER`: The username to connect as.
 * `ASYNC_SSH2_TEST_HOST_PW`: The corresponding password. Since this is plain text, creating a new unpriviledged user is recommended.
 
-Note: The doc tests do not use these variables and are therefor not run, but only compiled.
+Note: The doc tests do not use these variables and are therefore not run, but only compiled.

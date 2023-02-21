@@ -1,11 +1,13 @@
-//! This library, async-ssh2-tokio, is a asynchronous and super-easy-to-use high level ssh client library for rust.
-//! Powered by russh, a fork of thrussh.
+//! This library is an asynchronous and easy-to-use high level ssh client library
+//! for rust with the tokio runtime. Powered by the rust ssh implementation
+//! [russh](https://github.com/warp-tech/russh), a fork of thrussh.
 //!
 //! The heart of this library is [`client::Client`]. Use this for connection, authentification and execution.
 //!
 //! # Features
-//! * Connect to SSH Host via IP and password.
+//! * Connect to a SSH Host via IP and password.
 //! * Execute commands on the remote host
+//! * Get the stdout and exit code of the command
 //!
 //! # Example
 //! ```no_run
