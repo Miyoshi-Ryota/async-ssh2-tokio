@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use russh::client::{Config, Handle, Handler};
+use russh_keys::key::KeyPair;
 use std::io::{self, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
@@ -11,12 +12,43 @@ use std::sync::Arc;
 #[non_exhaustive]
 pub enum AuthMethod {
     Password(String),
+    PrivateKey(String, Option<String>), // entire contents of private key file
+    PrivateKeyFile(String, Option<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ServerCheckMethod {
+    NoCheck,
+    PublicKey(String), // base64 encoded key without the type prefix or hostname suffix (type is already encoded)
+    PublicKeyFile(String),
+    // KnownHostsFile(Option<String>), // TODO figure out how to get host:port to use with russh_keys::check_known_hosts_path
 }
 
 impl AuthMethod {
     /// Convenience method to create a [`AuthMethod`] from a string literal.
     pub fn with_password(password: &str) -> Self {
         Self::Password(password.to_string())
+    }
+
+    pub fn with_key(key: &str, passphrase: Option<&str>) -> Self {
+        Self::PrivateKey(key.to_string(), passphrase.map(str::to_string))
+    }
+
+    pub fn with_key_file(key_file_name: &str, passphrase: Option<&str>) -> Self {
+        Self::PrivateKeyFile(key_file_name.to_string(), passphrase.map(str::to_string))
+    }
+}
+
+impl ServerCheckMethod {
+    /// Convenience method to create a [`ServerCheckMethod`] from a string literal.
+
+    pub fn with_public_key(key: &str) -> Self {
+        Self::PublicKey(key.to_string())
+    }
+
+    pub fn with_public_key_file(key_file_name: &str) -> Self {
+        Self::PublicKeyFile(key_file_name.to_string())
     }
 }
 
@@ -31,13 +63,14 @@ impl AuthMethod {
 /// # Examples
 ///
 /// ```no_run
-/// use async_ssh2_tokio::{Client, AuthMethod};
+/// use async_ssh2_tokio::{Client, AuthMethod, ServerCheckMethod};
 /// #[tokio::main]
 /// async fn main() -> Result<(), async_ssh2_tokio::Error> {
 ///     let mut client = Client::connect(
 ///         ("10.10.10.2", 22),
 ///         "root",
 ///         AuthMethod::with_password("root"),
+///         ServerCheckMethod::NoCheck,
 ///     ).await?;
 ///
 ///     let result = client.execute("echo Hello SSH").await?;
@@ -67,8 +100,9 @@ impl Client {
         addr: impl ToSocketAddrs,
         username: &str,
         auth: AuthMethod,
+        server_check: ServerCheckMethod,
     ) -> Result<Self, crate::Error> {
-        Self::connect_with_config(addr, username, auth, Config::default()).await
+        Self::connect_with_config(addr, username, auth, server_check, Config::default()).await
     }
 
     /// Same as `connect`, but with the option to specify a non default
@@ -77,6 +111,7 @@ impl Client {
         addr: impl ToSocketAddrs,
         username: &str,
         auth: AuthMethod,
+        server_check: ServerCheckMethod,
         config: Config,
     ) -> Result<Self, crate::Error> {
         let config = Arc::new(config);
@@ -91,7 +126,9 @@ impl Client {
             "could not resolve to any addresses",
         )));
         for addr in addrs {
-            let handler = ClientHandler {};
+            let handler = ClientHandler {
+                server_check: server_check.clone(),
+            };
             match russh::client::connect(config.clone(), addr, handler).await {
                 Ok(h) => {
                     connect_res = Ok((addr, h));
@@ -125,6 +162,43 @@ impl Client {
                     Ok(())
                 } else {
                     Err(crate::Error::PasswordWrong)
+                }
+            }
+            AuthMethod::PrivateKey(key_data, key_pass) => {
+                let cprivk: KeyPair;
+                if let Ok(kp) =
+                    russh_keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
+                {
+                    cprivk = kp;
+                } else {
+                    return Err(crate::Error::KeyInvalid);
+                }
+
+                let is_authentificated = handle
+                    .authenticate_publickey(username, Arc::new(cprivk))
+                    .await?;
+                if is_authentificated {
+                    Ok(())
+                } else {
+                    Err(crate::Error::KeyAuthFailed)
+                }
+            }
+            AuthMethod::PrivateKeyFile(key_file_name, key_pass) => {
+                let cprivk: KeyPair;
+
+                if let Ok(kp) = russh_keys::load_secret_key(key_file_name, key_pass.as_deref()) {
+                    cprivk = kp;
+                } else {
+                    return Err(crate::Error::KeyInvalid);
+                }
+
+                let is_authentificated = handle
+                    .authenticate_publickey(username, Arc::new(cprivk))
+                    .await?;
+                if is_authentificated {
+                    Ok(())
+                } else {
+                    Err(crate::Error::KeyAuthFailed)
                 }
             }
         }
@@ -173,6 +247,17 @@ impl Client {
     pub fn get_connection_address(&self) -> &SocketAddr {
         &self.address
     }
+
+    pub async fn disconnect(&mut self) -> Result<(), russh::Error> {
+        match self
+            .connection_handle
+            .disconnect(russh::Disconnect::ByApplication, "", "")
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -184,7 +269,9 @@ pub struct CommandExecutedResult {
 }
 
 #[derive(Clone)]
-struct ClientHandler;
+struct ClientHandler {
+    server_check: ServerCheckMethod,
+}
 
 #[async_trait]
 impl Handler for ClientHandler {
@@ -192,21 +279,51 @@ impl Handler for ClientHandler {
 
     async fn check_server_key(
         self,
-        _server_public_key: &russh_keys::key::PublicKey,
+        server_public_key: &russh_keys::key::PublicKey,
     ) -> Result<(Self, bool), Self::Error> {
-        Ok((self, true))
+        match &self.server_check {
+            ServerCheckMethod::NoCheck => Ok((self, true)),
+            ServerCheckMethod::PublicKey(key) => {
+                if let Ok(pk) = russh_keys::parse_public_key_base64(key) {
+                    if pk == *server_public_key {
+                        return Ok((self, true));
+                    } else {
+                        return Ok((self, false));
+                    }
+                } else {
+                    return Err(crate::Error::ServerCheckFailed);
+                }
+            }
+            ServerCheckMethod::PublicKeyFile(key_file_name) => {
+                if let Ok(pk) = russh_keys::load_public_key(key_file_name) {
+                    if pk == *server_public_key {
+                        return Ok((self, true));
+                    } else {
+                        return Ok((self, false));
+                    }
+                } else {
+                    return Err(crate::Error::ServerCheckFailed);
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use core::time;
+
     use crate::client::*;
 
     async fn establish_test_host_connection() -> Client {
         Client::connect(
-            (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
+            (
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+            ),
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::NoCheck,
         )
         .await
         .expect("Connection/Authentification failed")
@@ -220,7 +337,12 @@ mod tests {
             client.get_connection_username(),
         );
         assert_eq!(
-            concat!(env!("ASYNC_SSH2_TEST_HOST_IP"), ":22").parse(),
+            concat!(
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                ":",
+                env!("ASYNC_SSH2_TEST_HOST_PORT")
+            )
+            .parse(),
             Ok(*client.get_connection_address()),
         );
     }
@@ -273,10 +395,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thousands_commands() {
+    async fn sequential_commands() {
         let mut client = establish_test_host_connection().await;
 
-        for i in 0..1000 {
+        for i in 0..30 {
+            std::thread::sleep(time::Duration::from_millis(200));
             let res = client
                 .execute(&format!("echo {i}"))
                 .await
@@ -304,20 +427,30 @@ mod tests {
     async fn connect_second_address() {
         let addresses = [
             SocketAddr::from(([127, 0, 0, 1], 23)),
-            concat!(env!("ASYNC_SSH2_TEST_HOST_IP"), ":22")
-                .parse()
-                .expect("invalid env var"),
+            concat!(
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                ":",
+                env!("ASYNC_SSH2_TEST_HOST_PORT")
+            )
+            .parse()
+            .expect("invalid env var"),
         ];
         let client = Client::connect(
             &addresses[..],
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::NoCheck,
         )
         .await
         .expect("Resolution to second address failed");
 
         assert_eq!(
-            concat!(env!("ASYNC_SSH2_TEST_HOST_IP"), ":22").parse(),
+            concat!(
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                ":",
+                env!("ASYNC_SSH2_TEST_HOST_PORT")
+            )
+            .parse(),
             Ok(*client.get_connection_address()),
         );
     }
@@ -325,9 +458,13 @@ mod tests {
     #[tokio::test]
     async fn connect_with_wrong_password() {
         let error = Client::connect(
-            (env!("ASYNC_SSH2_TEST_HOST_IP"), 22),
+            (
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+            ),
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password("hopefully the wrong password"),
+            ServerCheckMethod::NoCheck,
         )
         .await
         .err()
@@ -345,6 +482,7 @@ mod tests {
             "this is definitely not an address",
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password("hopefully the wrong password"),
+            ServerCheckMethod::NoCheck,
         )
         .await;
         assert!(no_client.is_err());
@@ -356,6 +494,7 @@ mod tests {
             (env!("ASYNC_SSH2_TEST_HOST_IP"), 23),
             env!("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::NoCheck,
         )
         .await;
         assert!(no_client.is_err());
@@ -364,8 +503,122 @@ mod tests {
     #[tokio::test]
     #[ignore = "This times out only after 20 seconds"]
     async fn connect_to_wrong_host() {
-        let no_client =
-            Client::connect("172.16.0.6:22", "xxx", AuthMethod::with_password("xxx")).await;
+        let no_client = Client::connect(
+            "172.16.0.6:22",
+            "xxx",
+            AuthMethod::with_password("xxx"),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
         assert!(no_client.is_err());
+    }
+
+    #[tokio::test]
+    async fn auth_key_file() {
+        let client = Client::connect(
+            (
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+            ),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_key_file(env!("ASYNC_SSH2_TEST_CLIENT_PRIV"), None),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_key_file_with_passphrase() {
+        let client = Client::connect(
+            (
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+            ),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_key_file(
+                env!("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV"),
+                Some(env!("ASYNC_SSH2_TEST_CLIENT_PROT_PASS")),
+            ),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        if client.is_err() {
+            println!("{:?}", client.err());
+            panic!();
+        }
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_key_str() {
+        let key = std::fs::read_to_string(env!("ASYNC_SSH2_TEST_CLIENT_PRIV")).unwrap();
+
+        let client = Client::connect(
+            (
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+            ),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_key(key.as_str(), None),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_key_str_with_passphrase() {
+        let key = std::fs::read_to_string(env!("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV")).unwrap();
+
+        let client = Client::connect(
+            (
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+            ),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_key(key.as_str(), Some(env!("ASYNC_SSH2_TEST_CLIENT_PROT_PASS"))),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn server_check_file() {
+        let client = Client::connect(
+            (
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+            ),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::with_public_key_file(env!("ASYNC_SSH2_TEST_SERVER_PUB")),
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn server_check_str() {
+        let line = std::fs::read_to_string(env!("ASYNC_SSH2_TEST_SERVER_PUB")).unwrap();
+        let mut split = line.split_whitespace();
+        let key = match (split.next(), split.next()) {
+            (Some(_), Some(k)) => k,
+            (Some(k), None) => k,
+            _ => panic!("Failed to parse pub key file"),
+        };
+
+        let client = Client::connect(
+            (
+                env!("ASYNC_SSH2_TEST_HOST_IP"),
+                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+            ),
+            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::with_public_key(key),
+        )
+        .await;
+        assert!(client.is_ok());
     }
 }

@@ -7,12 +7,18 @@ use std::io;
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("Authentification failed")]
+    #[error("Key authentification failed")]
+    KeyAuthFailed,
+    #[error("Unable to load key, bad format or passphrase")]
+    KeyInvalid,
+    #[error("Password authentification failed")]
     PasswordWrong,
     #[error("Invalid address was provided")]
     AddressInvalid(io::Error),
     #[error("The executed command didn't send an exit code")]
     CommandDidntExit,
+    #[error("Server check failed")]
+    ServerCheckFailed,
     #[error("Ssh error occured")]
     SshError(#[from] russh::Error),
 }
