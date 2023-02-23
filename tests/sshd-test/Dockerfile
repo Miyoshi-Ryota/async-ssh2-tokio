@@ -1,5 +1,7 @@
 FROM linuxkit/sshd:62036c2a279715d05e8298b9269a0659964f2619-amd64
 
+SHELL ["/bin/ash", "-c"]
+
 RUN echo 'root:root' |chpasswd
 
 RUN sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/g' /etc/ssh/sshd_config

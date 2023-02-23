@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # change to script dir
-cd "${0%/*}"
+cd "${0%/*}" || exit 1
 
 # generate keys if not present
-[ -e "server.ed25519" ] || ssh-keygen -t ed25519 -q -f "server.ed25519" -N ""
-[ -e "client.ed25519" ] || ssh-keygen -t ed25519 -q -f "client.ed25519" -N ""
-[ -e "client.prot.ed25519" ] || ssh-keygen -t ed25519 -q -f "client.prot.ed25519" -N "test"
+[ -e "server.ed25519" ] || ssh-keygen -t ed25519 -q -f "server.ed25519" -N "" || exit 1
+[ -e "client.ed25519" ] || ssh-keygen -t ed25519 -q -f "client.ed25519" -N "" || exit 1
+[ -e "client.prot.ed25519" ] || ssh-keygen -t ed25519 -q -f "client.prot.ed25519" -N "test" || exit 1
 
 # copy files into the Dockerfile folders
 cp server.ed25519 sshd-test/ssh_host_ed25519_key

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # change to script dir
-cd "${0%/*}"
+cd "${0%/*}" || exit 1
 
 ./generate_test_keys.sh || exit 1
 
