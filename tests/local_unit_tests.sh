@@ -40,7 +40,7 @@ fi
 sshpass -p "$ASYNC_SSH2_TEST_HOST_PW" ssh-copy-id -o StrictHostKeyChecking=no -p "$ASYNC_SSH2_TEST_HOST_PORT" -i "$ASYNC_SSH2_TEST_CLIENT_PRIV" "$ASYNC_SSH2_TEST_HOST_USER"@"$ASYNC_SSH2_TEST_HOST_IP" || exit 1
 
 # manually copy the protected one since ssh-copy-id has issues with it and we are going to use the non-protected one to do it
-cat "$ASYNC_SSH2_TEST_CLIENT_PROT_PUB" | ssh -i "$ASYNC_SSH2_TEST_CLIENT_PRIV" -p "$ASYNC_SSH2_TEST_HOST_PORT" "$ASYNC_SSH2_TEST_HOST_USER"@"$ASYNC_SSH2_TEST_HOST_IP" \
-'cat - >> ~/.ssh/authorized_keys; sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' || exit 1
+ssh -i "$ASYNC_SSH2_TEST_CLIENT_PRIV" -p "$ASYNC_SSH2_TEST_HOST_PORT" "$ASYNC_SSH2_TEST_HOST_USER"@"$ASYNC_SSH2_TEST_HOST_IP" \
+'cat - >> ~/.ssh/authorized_keys; sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' < "$ASYNC_SSH2_TEST_CLIENT_PROT_PUB" || exit 1
 
 cargo test -- --test-threads=2
