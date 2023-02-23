@@ -11,7 +11,7 @@
 //!
 //! # Example
 //! ```no_run
-//! use async_ssh2_tokio::client::{Client, AuthMethod};
+//! use async_ssh2_tokio::client::{Client, AuthMethod, ServerCheckMethod};
 //! #[tokio::main]
 //! async fn main() -> Result<(), async_ssh2_tokio::Error> {
 //!     // Only ip and password based authentification is implemented.
@@ -20,6 +20,7 @@
 //!         ("10.10.10.2", 22),
 //!         "root",
 //!         AuthMethod::with_password("root"),
+//!         ServerCheckMethod::NoCheck,
 //!     ).await?;
 //!
 //!     let result = client.execute("echo Hello SSH").await?;
@@ -37,5 +38,5 @@
 pub mod client;
 pub mod error;
 
-pub use client::{AuthMethod, Client};
+pub use client::{AuthMethod, Client, ServerCheckMethod};
 pub use error::Error;

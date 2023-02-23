@@ -1,7 +1,9 @@
-version: "2.3"
+---
+version: "3.9"
 services:
   ssh-server:
-    image: rastasheep/ubuntu-sshd
+    build:
+      context: ./sshd-test
     container_name: ssh-server
     networks:
       ssh-network:
@@ -16,7 +18,6 @@ services:
         ipv4_address: 10.10.10.3
     depends_on:
       - ssh-server
-
 networks:
   ssh-network:
     driver: bridge
