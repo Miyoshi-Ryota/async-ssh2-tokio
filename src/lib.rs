@@ -5,7 +5,7 @@
 //! The heart of this library is [`client::Client`]. Use this for connection, authentification and execution.
 //!
 //! # Features
-//! * Connect to a SSH Host via IP and password
+//! * Connect to a SSH Host via IP
 //! * Execute commands on the remote host
 //! * Get the stdout and exit code of the command
 //!
@@ -14,12 +14,17 @@
 //! use async_ssh2_tokio::client::{Client, AuthMethod, ServerCheckMethod};
 //! #[tokio::main]
 //! async fn main() -> Result<(), async_ssh2_tokio::Error> {
-//!     // Only ip and password based authentification is implemented.
-//!     // If you need key based authentification, create github issue or contribute.
+//!     // if you want to use key auth, then use following:
+//!     // AuthMethod::with_key_file("key_file_name", Some("passphrase"));
+//!     // or
+//!     // AuthMethod::with_key_file("key_file_name", None);
+//!     // or
+//!     // AuthMethod::with_key(key: &str, passphrase: Option<&str>)
+//!     let auth_method = AuthMethod::with_password("root");
 //!     let mut client = Client::connect(
 //!         ("10.10.10.2", 22),
 //!         "root",
-//!         AuthMethod::with_password("root"),
+//!         auth_method,
 //!         ServerCheckMethod::NoCheck,
 //!     ).await?;
 //!
