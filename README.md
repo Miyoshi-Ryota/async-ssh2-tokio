@@ -21,7 +21,7 @@ tokio = "1"
 async-ssh2-tokio = "0.6.0"
 ```
 
-## Usage (PassWORD)
+## Usage
 ```rust
 use async_ssh2_tokio::client::{Client, AuthMethod, ServerCheckMethod};
 #[tokio::main]
