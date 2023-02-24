@@ -10,7 +10,7 @@ for rust with the tokio runtime. Powered by the rust ssh implementation
 
 
 ## Features
-* Connect to a SSH Host via IP and password
+* Connect to a SSH Host
 * Execute commands on the remote host
 * Get the stdout and exit code of the command
 
