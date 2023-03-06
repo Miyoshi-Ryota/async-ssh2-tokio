@@ -284,26 +284,16 @@ impl Handler for ClientHandler {
         match &self.server_check {
             ServerCheckMethod::NoCheck => Ok((self, true)),
             ServerCheckMethod::PublicKey(key) => {
-                if let Ok(pk) = russh_keys::parse_public_key_base64(key) {
-                    if pk == *server_public_key {
-                        return Ok((self, true));
-                    } else {
-                        return Ok((self, false));
-                    }
-                } else {
-                    return Err(crate::Error::ServerCheckFailed);
-                }
+                let pk = russh_keys::parse_public_key_base64(key)
+                    .map_err(|_| crate::Error::ServerCheckFailed)?;
+
+                Ok((self, pk == *server_public_key))
             }
             ServerCheckMethod::PublicKeyFile(key_file_name) => {
-                if let Ok(pk) = russh_keys::load_public_key(key_file_name) {
-                    if pk == *server_public_key {
-                        return Ok((self, true));
-                    } else {
-                        return Ok((self, false));
-                    }
-                } else {
-                    return Err(crate::Error::ServerCheckFailed);
-                }
+                let pk = russh_keys::load_public_key(key_file_name)
+                    .map_err(|_| crate::Error::ServerCheckFailed)?;
+
+                Ok((self, pk == *server_public_key))
             }
         }
     }
