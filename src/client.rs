@@ -22,7 +22,8 @@ pub enum ServerCheckMethod {
     NoCheck,
     PublicKey(String), // base64 encoded key without the type prefix or hostname suffix (type is already encoded)
     PublicKeyFile(String),
-    // KnownHostsFile(Option<String>), // TODO figure out how to get host:port to use with russh_keys::check_known_hosts_path
+    DefaultKnownHostsFile,
+    KnownHostsFile(String),
 }
 
 impl AuthMethod {
@@ -49,6 +50,10 @@ impl ServerCheckMethod {
 
     pub fn with_public_key_file(key_file_name: &str) -> Self {
         Self::PublicKeyFile(key_file_name.to_string())
+    }
+
+    pub fn with_known_hosts_file(known_hosts_file: &str) -> Self {
+        Self::KnownHostsFile(known_hosts_file.to_string())
     }
 }
 
@@ -127,6 +132,7 @@ impl Client {
         )));
         for addr in addrs {
             let handler = ClientHandler {
+                host: addr,
                 server_check: server_check.clone(),
             };
             match russh::client::connect(config.clone(), addr, handler).await {
@@ -270,6 +276,7 @@ pub struct CommandExecutedResult {
 
 #[derive(Clone)]
 struct ClientHandler {
+    host: SocketAddr,
     server_check: ServerCheckMethod,
 }
 
@@ -284,26 +291,37 @@ impl Handler for ClientHandler {
         match &self.server_check {
             ServerCheckMethod::NoCheck => Ok((self, true)),
             ServerCheckMethod::PublicKey(key) => {
-                if let Ok(pk) = russh_keys::parse_public_key_base64(key) {
-                    if pk == *server_public_key {
-                        return Ok((self, true));
-                    } else {
-                        return Ok((self, false));
-                    }
-                } else {
-                    return Err(crate::Error::ServerCheckFailed);
-                }
+                let pk = russh_keys::parse_public_key_base64(key)
+                    .map_err(|_| crate::Error::ServerCheckFailed)?;
+
+                Ok((self, pk == *server_public_key))
             }
             ServerCheckMethod::PublicKeyFile(key_file_name) => {
-                if let Ok(pk) = russh_keys::load_public_key(key_file_name) {
-                    if pk == *server_public_key {
-                        return Ok((self, true));
-                    } else {
-                        return Ok((self, false));
-                    }
-                } else {
-                    return Err(crate::Error::ServerCheckFailed);
-                }
+                let pk = russh_keys::load_public_key(key_file_name)
+                    .map_err(|_| crate::Error::ServerCheckFailed)?;
+
+                Ok((self, pk == *server_public_key))
+            }
+            ServerCheckMethod::KnownHostsFile(known_hosts_path) => {
+                let result = russh_keys::check_known_hosts_path(
+                    &self.host.ip().to_string(),
+                    self.host.port(),
+                    server_public_key,
+                    known_hosts_path,
+                )
+                .map_err(|_| crate::Error::ServerCheckFailed)?;
+
+                Ok((self, result))
+            }
+            ServerCheckMethod::DefaultKnownHostsFile => {
+                let result = russh_keys::check_known_hosts(
+                    &self.host.ip().to_string(),
+                    self.host.port(),
+                    server_public_key,
+                )
+                .map_err(|_| crate::Error::ServerCheckFailed)?;
+
+                Ok((self, result))
             }
         }
     }
