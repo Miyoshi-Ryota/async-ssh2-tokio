@@ -12,15 +12,23 @@ use std::sync::Arc;
 #[non_exhaustive]
 pub enum AuthMethod {
     Password(String),
-    PrivateKey(String, Option<String>), // entire contents of private key file
-    PrivateKeyFile(String, Option<String>),
+    PrivateKey {
+        /// entire contents of private key file
+        key_data: String,
+        key_pass: Option<String>,
+    },
+    PrivateKeyFile {
+        key_file_name: String,
+        key_pass: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ServerCheckMethod {
     NoCheck,
-    PublicKey(String), // base64 encoded key without the type prefix or hostname suffix (type is already encoded)
+    /// base64 encoded key without the type prefix or hostname suffix (type is already encoded)
+    PublicKey(String),
     PublicKeyFile(String),
     DefaultKnownHostsFile,
     KnownHostsFile(String),
@@ -33,11 +41,17 @@ impl AuthMethod {
     }
 
     pub fn with_key(key: &str, passphrase: Option<&str>) -> Self {
-        Self::PrivateKey(key.to_string(), passphrase.map(str::to_string))
+        Self::PrivateKey {
+            key_data: key.to_string(),
+            key_pass: passphrase.map(str::to_string),
+        }
     }
 
     pub fn with_key_file(key_file_name: &str, passphrase: Option<&str>) -> Self {
-        Self::PrivateKeyFile(key_file_name.to_string(), passphrase.map(str::to_string))
+        Self::PrivateKeyFile {
+            key_file_name: key_file_name.to_string(),
+            key_pass: passphrase.map(str::to_string),
+        }
     }
 }
 
@@ -170,7 +184,7 @@ impl Client {
                     Err(crate::Error::PasswordWrong)
                 }
             }
-            AuthMethod::PrivateKey(key_data, key_pass) => {
+            AuthMethod::PrivateKey { key_data, key_pass } => {
                 let cprivk: KeyPair;
                 if let Ok(kp) =
                     russh_keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
@@ -189,7 +203,10 @@ impl Client {
                     Err(crate::Error::KeyAuthFailed)
                 }
             }
-            AuthMethod::PrivateKeyFile(key_file_name, key_pass) => {
+            AuthMethod::PrivateKeyFile {
+                key_file_name,
+                key_pass,
+            } => {
                 let cprivk: KeyPair;
 
                 if let Ok(kp) = russh_keys::load_secret_key(key_file_name, key_pass.as_deref()) {
