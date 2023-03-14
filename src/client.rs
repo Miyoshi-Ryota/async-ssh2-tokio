@@ -239,7 +239,7 @@ impl Client {
     ///
     /// Can be called multiple times, but every invocation is a new shell context.
     /// Thus `cd`, setting variables and alike have no effect on future invocations.
-    pub async fn execute(&mut self, command: &str) -> Result<CommandExecutedResult, crate::Error> {
+    pub async fn execute(&self, command: &str) -> Result<CommandExecutedResult, crate::Error> {
         let mut receive_buffer = vec![];
         let mut channel = self.connection_handle.channel_open_session().await?;
         channel.exec(true, command).await?;
@@ -271,7 +271,7 @@ impl Client {
         &self.address
     }
 
-    pub async fn disconnect(&mut self) -> Result<(), russh::Error> {
+    pub async fn disconnect(&self) -> Result<(), russh::Error> {
         match self
             .connection_handle
             .disconnect(russh::Disconnect::ByApplication, "", "")
