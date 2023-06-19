@@ -10,7 +10,7 @@ pub enum Error {
     #[error("Key authentification failed")]
     KeyAuthFailed,
     #[error("Unable to load key, bad format or passphrase")]
-    KeyInvalid,
+    KeyInvalid(russh_keys::Error),
     #[error("Password authentification failed")]
     PasswordWrong,
     #[error("Invalid address was provided")]
