@@ -350,14 +350,39 @@ mod tests {
 
     use crate::client::*;
 
+    fn env(name: &str) -> String {
+        std::env::var(name).expect(
+            "Failed to get env var needed for test, make sure to set the following env vars:
+ASYNC_SSH2_TEST_HOST_USER
+ASYNC_SSH2_TEST_HOST_PW
+ASYNC_SSH2_TEST_HOST_IP
+ASYNC_SSH2_TEST_HOST_PORT
+ASYNC_SSH2_TEST_CLIENT_PROT_PRIV
+ASYNC_SSH2_TEST_CLIENT_PRIV
+ASYNC_SSH2_TEST_CLIENT_PROT_PASS
+ASYNC_SSH2_TEST_SERVER_PUB
+",
+        )
+    }
+
+    fn test_address() -> SocketAddr {
+        format!(
+            "{}:{}",
+            env("ASYNC_SSH2_TEST_HOST_IP"),
+            env("ASYNC_SSH2_TEST_HOST_PORT")
+        )
+        .parse()
+        .unwrap()
+    }
+
     async fn establish_test_host_connection() -> Client {
         Client::connect(
             (
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+                env("ASYNC_SSH2_TEST_HOST_IP"),
+                env("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
             ),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::NoCheck,
         )
         .await
@@ -368,18 +393,10 @@ mod tests {
     async fn connect_with_password() {
         let client = establish_test_host_connection().await;
         assert_eq!(
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
             client.get_connection_username(),
         );
-        assert_eq!(
-            concat!(
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                ":",
-                env!("ASYNC_SSH2_TEST_HOST_PORT")
-            )
-            .parse(),
-            Ok(*client.get_connection_address()),
-        );
+        assert_eq!(test_address(), *client.get_connection_address(),);
     }
 
     #[tokio::test]
@@ -460,44 +477,23 @@ mod tests {
 
     #[tokio::test]
     async fn connect_second_address() {
-        let addresses = [
-            SocketAddr::from(([127, 0, 0, 1], 23)),
-            concat!(
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                ":",
-                env!("ASYNC_SSH2_TEST_HOST_PORT")
-            )
-            .parse()
-            .expect("invalid env var"),
-        ];
         let client = Client::connect(
-            &addresses[..],
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            &[SocketAddr::from(([127, 0, 0, 1], 23)), test_address()][..],
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::NoCheck,
         )
         .await
         .expect("Resolution to second address failed");
 
-        assert_eq!(
-            concat!(
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                ":",
-                env!("ASYNC_SSH2_TEST_HOST_PORT")
-            )
-            .parse(),
-            Ok(*client.get_connection_address()),
-        );
+        assert_eq!(test_address(), *client.get_connection_address(),);
     }
 
     #[tokio::test]
     async fn connect_with_wrong_password() {
         let error = Client::connect(
-            (
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
-            ),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password("hopefully the wrong password"),
             ServerCheckMethod::NoCheck,
         )
@@ -515,7 +511,7 @@ mod tests {
     async fn invalid_address() {
         let no_client = Client::connect(
             "this is definitely not an address",
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_password("hopefully the wrong password"),
             ServerCheckMethod::NoCheck,
         )
@@ -526,9 +522,9 @@ mod tests {
     #[tokio::test]
     async fn connect_to_wrong_port() {
         let no_client = Client::connect(
-            (env!("ASYNC_SSH2_TEST_HOST_IP"), 23),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            (env("ASYNC_SSH2_TEST_HOST_IP"), 23),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -551,12 +547,9 @@ mod tests {
     #[tokio::test]
     async fn auth_key_file() {
         let client = Client::connect(
-            (
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
-            ),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_key_file(env!("ASYNC_SSH2_TEST_CLIENT_PRIV"), None),
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_key_file(&env("ASYNC_SSH2_TEST_CLIENT_PRIV"), None),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -566,14 +559,11 @@ mod tests {
     #[tokio::test]
     async fn auth_key_file_with_passphrase() {
         let client = Client::connect(
-            (
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
-            ),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_key_file(
-                env!("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV"),
-                Some(env!("ASYNC_SSH2_TEST_CLIENT_PROT_PASS")),
+                &env("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV"),
+                Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS")),
             ),
             ServerCheckMethod::NoCheck,
         )
@@ -587,14 +577,11 @@ mod tests {
 
     #[tokio::test]
     async fn auth_key_str() {
-        let key = std::fs::read_to_string(env!("ASYNC_SSH2_TEST_CLIENT_PRIV")).unwrap();
+        let key = std::fs::read_to_string(env("ASYNC_SSH2_TEST_CLIENT_PRIV")).unwrap();
 
         let client = Client::connect(
-            (
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
-            ),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_key(key.as_str(), None),
             ServerCheckMethod::NoCheck,
         )
@@ -604,15 +591,12 @@ mod tests {
 
     #[tokio::test]
     async fn auth_key_str_with_passphrase() {
-        let key = std::fs::read_to_string(env!("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV")).unwrap();
+        let key = std::fs::read_to_string(env("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV")).unwrap();
 
         let client = Client::connect(
-            (
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
-            ),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_key(key.as_str(), Some(env!("ASYNC_SSH2_TEST_CLIENT_PROT_PASS"))),
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_key(key.as_str(), Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS"))),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -622,13 +606,10 @@ mod tests {
     #[tokio::test]
     async fn server_check_file() {
         let client = Client::connect(
-            (
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
-            ),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
-            ServerCheckMethod::with_public_key_file(env!("ASYNC_SSH2_TEST_SERVER_PUB")),
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::with_public_key_file(&env("ASYNC_SSH2_TEST_SERVER_PUB")),
         )
         .await;
         assert!(client.is_ok());
@@ -636,7 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn server_check_str() {
-        let line = std::fs::read_to_string(env!("ASYNC_SSH2_TEST_SERVER_PUB")).unwrap();
+        let line = std::fs::read_to_string(env("ASYNC_SSH2_TEST_SERVER_PUB")).unwrap();
         let mut split = line.split_whitespace();
         let key = match (split.next(), split.next()) {
             (Some(_), Some(k)) => k,
@@ -645,12 +626,9 @@ mod tests {
         };
 
         let client = Client::connect(
-            (
-                env!("ASYNC_SSH2_TEST_HOST_IP"),
-                env!("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
-            ),
-            env!("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(env!("ASYNC_SSH2_TEST_HOST_PW")),
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::with_public_key(key),
         )
         .await;
