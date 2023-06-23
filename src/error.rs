@@ -7,11 +7,11 @@ use std::io;
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("Key authentification failed")]
+    #[error("Key authentication failed")]
     KeyAuthFailed,
     #[error("Unable to load key, bad format or passphrase")]
     KeyInvalid(russh_keys::Error),
-    #[error("Password authentification failed")]
+    #[error("Password authentication failed")]
     PasswordWrong,
     #[error("Invalid address was provided")]
     AddressInvalid(io::Error),

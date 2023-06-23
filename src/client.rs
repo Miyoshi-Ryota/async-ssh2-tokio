@@ -232,26 +232,48 @@ impl Client {
     ///
     /// Can be called multiple times, but every invocation is a new shell context.
     /// Thus `cd`, setting variables and alike have no effect on future invocations.
+    /// Can be called multiple times, but every invocation is a new shell context.
+    /// Thus `cd`, setting variables and alike have no effect on future invocations.
     pub async fn execute(&self, command: &str) -> Result<CommandExecutedResult, crate::Error> {
         let mut receive_buffer = vec![];
         let mut channel = self.connection_handle.channel_open_session().await?;
         channel.exec(true, command).await?;
 
+        let mut result: Option<u32> = None;
+
+        // While the channel has messages...
         while let Some(msg) = channel.wait().await {
+            //dbg!(&msg);
             match msg {
+
+                // If we get data, add it to the buffer
                 russh::ChannelMsg::Data { ref data } => receive_buffer.write_all(data).unwrap(),
-                russh::ChannelMsg::ExitStatus { exit_status } => {
-                    let result = CommandExecutedResult {
-                        output: String::from_utf8_lossy(&receive_buffer).to_string(),
-                        exit_status,
-                    };
-                    return Ok(result);
-                }
+
+                // If we get an exit code report, store it, but crucially don't
+                // assume this message means end of communications. The data might
+                // not be finished yet!
+                russh::ChannelMsg::ExitStatus { exit_status } => result = Some(exit_status),
+
+                // We SHOULD get this EOF messagge, but 4254 sec 5.3 also permits
+                // the channel to close without it being sent. And sometimes this
+                // message can even precede the Data message, so don't handle it
+                // russh::ChannelMsg::Eof => break,
                 _ => {}
             }
         }
 
-        Err(crate::Error::CommandDidntExit)
+        // If we received an exit code, report it back
+        if result.is_some() {
+            Ok(CommandExecutedResult {
+                output: String::from_utf8_lossy(&receive_buffer).to_string(),
+                exit_status: result.unwrap(),                
+            })
+
+        // Otherwise, report an error
+        } else {
+            Err(crate::Error::CommandDidntExit)
+        }
+
     }
 
     /// A debugging function to get the username this client is connected as.
