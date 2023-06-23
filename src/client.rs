@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use russh::client::{Config, Handle, Handler};
-use russh_keys::key::KeyPair;
 use std::io::{self, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
@@ -185,14 +184,11 @@ impl Client {
                 }
             }
             AuthMethod::PrivateKey { key_data, key_pass } => {
-                let cprivk: KeyPair;
-                if let Ok(kp) =
-                    russh_keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
-                {
-                    cprivk = kp;
-                } else {
-                    return Err(crate::Error::KeyInvalid);
-                }
+                let cprivk =
+                    match russh_keys::decode_secret_key(key_data.as_str(), key_pass.as_deref()) {
+                        Ok(kp) => kp,
+                        Err(e) => return Err(crate::Error::KeyInvalid(e)),
+                    };
 
                 let is_authentificated = handle
                     .authenticate_publickey(username, Arc::new(cprivk))
@@ -207,13 +203,10 @@ impl Client {
                 key_file_name,
                 key_pass,
             } => {
-                let cprivk: KeyPair;
-
-                if let Ok(kp) = russh_keys::load_secret_key(key_file_name, key_pass.as_deref()) {
-                    cprivk = kp;
-                } else {
-                    return Err(crate::Error::KeyInvalid);
-                }
+                let cprivk = match russh_keys::load_secret_key(key_file_name, key_pass.as_deref()) {
+                    Ok(kp) => kp,
+                    Err(e) => return Err(crate::Error::KeyInvalid(e)),
+                };
 
                 let is_authentificated = handle
                     .authenticate_publickey(username, Arc::new(cprivk))
@@ -401,7 +394,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
 
     #[tokio::test]
     async fn execute_command_result() {
-        let mut client = establish_test_host_connection().await;
+        let client = establish_test_host_connection().await;
         let output = client.execute("echo test!!!").await.unwrap();
         assert_eq!("test!!!\n", output.output);
         assert_eq!(0, output.exit_status);
@@ -409,7 +402,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
 
     #[tokio::test]
     async fn unicode_output() {
-        let mut client = establish_test_host_connection().await;
+        let client = establish_test_host_connection().await;
         let output = client.execute("echo To thḙ moon! 🚀").await.unwrap();
         assert_eq!("To thḙ moon! 🚀\n", output.output);
         assert_eq!(0, output.exit_status);
@@ -417,14 +410,14 @@ ASYNC_SSH2_TEST_SERVER_PUB
 
     #[tokio::test]
     async fn execute_command_status() {
-        let mut client = establish_test_host_connection().await;
+        let client = establish_test_host_connection().await;
         let output = client.execute("exit 42").await.unwrap();
         assert_eq!(42, output.exit_status);
     }
 
     #[tokio::test]
     async fn execute_multiple_commands() {
-        let mut client = establish_test_host_connection().await;
+        let client = establish_test_host_connection().await;
         let output = client.execute("echo test!!!").await.unwrap().output;
         assert_eq!("test!!!\n", output);
 
@@ -434,7 +427,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
 
     #[tokio::test]
     async fn stderr_redirection() {
-        let mut client = establish_test_host_connection().await;
+        let client = establish_test_host_connection().await;
 
         let output = client.execute("echo foo >/dev/null").await.unwrap();
         assert_eq!("", output.output);
@@ -448,7 +441,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
 
     #[tokio::test]
     async fn sequential_commands() {
-        let mut client = establish_test_host_connection().await;
+        let client = establish_test_host_connection().await;
 
         for i in 0..30 {
             std::thread::sleep(time::Duration::from_millis(200));
@@ -463,7 +456,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
     #[tokio::test]
     async fn execute_multiple_context() {
         // This is maybe not expected behaviour, thus documenting this via a test is important.
-        let mut client = establish_test_host_connection().await;
+        let client = establish_test_host_connection().await;
         let output = client
             .execute("export VARIABLE=42; echo $VARIABLE")
             .await
