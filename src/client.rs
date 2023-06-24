@@ -232,8 +232,6 @@ impl Client {
     ///
     /// Can be called multiple times, but every invocation is a new shell context.
     /// Thus `cd`, setting variables and alike have no effect on future invocations.
-    /// Can be called multiple times, but every invocation is a new shell context.
-    /// Thus `cd`, setting variables and alike have no effect on future invocations.
     pub async fn execute(&self, command: &str) -> Result<CommandExecutedResult, crate::Error> {
         let mut receive_buffer = vec![];
         let mut channel = self.connection_handle.channel_open_session().await?;
@@ -245,7 +243,6 @@ impl Client {
         while let Some(msg) = channel.wait().await {
             //dbg!(&msg);
             match msg {
-
                 // If we get data, add it to the buffer
                 russh::ChannelMsg::Data { ref data } => receive_buffer.write_all(data).unwrap(),
 
@@ -266,14 +263,13 @@ impl Client {
         if result.is_some() {
             Ok(CommandExecutedResult {
                 output: String::from_utf8_lossy(&receive_buffer).to_string(),
-                exit_status: result.unwrap(),                
+                exit_status: result.unwrap(),
             })
 
         // Otherwise, report an error
         } else {
             Err(crate::Error::CommandDidntExit)
         }
-
     }
 
     /// A debugging function to get the username this client is connected as.
