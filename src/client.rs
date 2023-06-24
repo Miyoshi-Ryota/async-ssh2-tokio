@@ -232,8 +232,6 @@ impl Client {
     ///
     /// Can be called multiple times, but every invocation is a new shell context.
     /// Thus `cd`, setting variables and alike have no effect on future invocations.
-    /// Can be called multiple times, but every invocation is a new shell context.
-    /// Thus `cd`, setting variables and alike have no effect on future invocations.
     pub async fn execute(&self, command: &str) -> Result<CommandExecutedResult, crate::Error> {
         let mut receive_buffer = vec![];
         let mut channel = self.connection_handle.channel_open_session().await?;
