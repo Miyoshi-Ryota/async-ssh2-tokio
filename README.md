@@ -41,11 +41,11 @@ async fn main() -> Result<(), async_ssh2_tokio::Error> {
     ).await?;
 
     let result = client.execute("echo Hello SSH").await?;
-    assert_eq!(result.output, "Hello SSH\n");
+    assert_eq!(result.stdout, "Hello SSH\n");
     assert_eq!(result.exit_status, 0);
 
     let result = client.execute("echo Hello Again :)").await?;
-    assert_eq!(result.output, "Hello Again :)\n");
+    assert_eq!(result.stdout, "Hello Again :)\n");
     assert_eq!(result.exit_status, 0);
 
     Ok(())

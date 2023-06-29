@@ -92,7 +92,7 @@ impl ServerCheckMethod {
 ///     ).await?;
 ///
 ///     let result = client.execute("echo Hello SSH").await?;
-///     assert_eq!(result.output, "Hello SSH\n");
+///     assert_eq!(result.stdout, "Hello SSH\n");
 ///     assert_eq!(result.exit_status, 0);
 ///
 ///     Ok(())
@@ -222,18 +222,19 @@ impl Client {
 
     /// Execute a remote command via the ssh connection.
     ///
-    /// Returns both the stdout output and the exit code of the command,
+    /// Returns stdout, stderr and the exit code of the command,
     /// packaged in a [`CommandExecutedResult`] struct.
-    /// If you need the stderr output, consider prefixing the command with a redirection,
-    /// e.g. `2>&1 echo foo >>/dev/stderr`. If you don't need the output, use something like
-    /// `echo foo >/dev/null`. Make sure your commands don't read from stdin and
-    /// exit after bounded time.
+    /// If you need the stderr output interleaved within stdout, you should postfix the command with a redirection,
+    /// e.g. `echo foo 2>&1`.
+    /// If you dont want any output at all, use something like `echo foo >/dev/null 2>&1`.
     ///
+    /// Make sure your commands don't read from stdin and exit after bounded time.
     ///
     /// Can be called multiple times, but every invocation is a new shell context.
     /// Thus `cd`, setting variables and alike have no effect on future invocations.
     pub async fn execute(&self, command: &str) -> Result<CommandExecutedResult, crate::Error> {
-        let mut receive_buffer = vec![];
+        let mut stdout_buffer = vec![];
+        let mut stderr_buffer = vec![];
         let mut channel = self.connection_handle.channel_open_session().await?;
         channel.exec(true, command).await?;
 
@@ -244,7 +245,12 @@ impl Client {
             //dbg!(&msg);
             match msg {
                 // If we get data, add it to the buffer
-                russh::ChannelMsg::Data { ref data } => receive_buffer.write_all(data).unwrap(),
+                russh::ChannelMsg::Data { ref data } => stdout_buffer.write_all(data).unwrap(),
+                russh::ChannelMsg::ExtendedData { ref data, ext } => {
+                    if ext == 1 {
+                        stderr_buffer.write_all(data).unwrap()
+                    }
+                }
 
                 // If we get an exit code report, store it, but crucially don't
                 // assume this message means end of communications. The data might
@@ -262,7 +268,8 @@ impl Client {
         // If we received an exit code, report it back
         if result.is_some() {
             Ok(CommandExecutedResult {
-                output: String::from_utf8_lossy(&receive_buffer).to_string(),
+                stdout: String::from_utf8_lossy(&stdout_buffer).to_string(),
+                stderr: String::from_utf8_lossy(&stderr_buffer).to_string(),
                 exit_status: result.unwrap(),
             })
 
@@ -297,7 +304,9 @@ impl Client {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommandExecutedResult {
     /// The stdout output of the command.
-    pub output: String,
+    pub stdout: String,
+    /// The stderr output of the command.
+    pub stderr: String,
     /// The unix exit status (`$?` in bash).
     pub exit_status: u32,
 }
@@ -414,7 +423,17 @@ ASYNC_SSH2_TEST_SERVER_PUB
     async fn execute_command_result() {
         let client = establish_test_host_connection().await;
         let output = client.execute("echo test!!!").await.unwrap();
-        assert_eq!("test!!!\n", output.output);
+        assert_eq!("test!!!\n", output.stdout);
+        assert_eq!("", output.stderr);
+        assert_eq!(0, output.exit_status);
+    }
+
+    #[tokio::test]
+    async fn execute_command_result_stderr() {
+        let client = establish_test_host_connection().await;
+        let output = client.execute("echo test!!! 1>&2").await.unwrap();
+        assert_eq!("", output.stdout);
+        assert_eq!("test!!!\n", output.stderr);
         assert_eq!(0, output.exit_status);
     }
 
@@ -422,7 +441,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
     async fn unicode_output() {
         let client = establish_test_host_connection().await;
         let output = client.execute("echo To thḙ moon! 🚀").await.unwrap();
-        assert_eq!("To thḙ moon! 🚀\n", output.output);
+        assert_eq!("To thḙ moon! 🚀\n", output.stdout);
         assert_eq!(0, output.exit_status);
     }
 
@@ -436,10 +455,10 @@ ASYNC_SSH2_TEST_SERVER_PUB
     #[tokio::test]
     async fn execute_multiple_commands() {
         let client = establish_test_host_connection().await;
-        let output = client.execute("echo test!!!").await.unwrap().output;
+        let output = client.execute("echo test!!!").await.unwrap().stdout;
         assert_eq!("test!!!\n", output);
 
-        let output = client.execute("echo Hello World").await.unwrap().output;
+        let output = client.execute("echo Hello World").await.unwrap().stdout;
         assert_eq!("Hello World\n", output);
     }
 
@@ -448,13 +467,13 @@ ASYNC_SSH2_TEST_SERVER_PUB
         let client = establish_test_host_connection().await;
 
         let output = client.execute("echo foo >/dev/null").await.unwrap();
-        assert_eq!("", output.output);
+        assert_eq!("", output.stdout);
 
         let output = client.execute("echo foo >>/dev/stderr").await.unwrap();
-        assert_eq!("", output.output);
+        assert_eq!("", output.stdout);
 
         let output = client.execute("2>&1 echo foo >>/dev/stderr").await.unwrap();
-        assert_eq!("foo\n", output.output);
+        assert_eq!("foo\n", output.stdout);
     }
 
     #[tokio::test]
@@ -467,7 +486,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
                 .execute(&format!("echo {i}"))
                 .await
                 .expect(&format!("Execution failed in iteration {i}"));
-            assert_eq!(format!("{i}\n"), res.output);
+            assert_eq!(format!("{i}\n"), res.stdout);
         }
     }
 
@@ -479,10 +498,10 @@ ASYNC_SSH2_TEST_SERVER_PUB
             .execute("export VARIABLE=42; echo $VARIABLE")
             .await
             .unwrap()
-            .output;
+            .stdout;
         assert_eq!("42\n", output);
 
-        let output = client.execute("echo $VARIABLE").await.unwrap().output;
+        let output = client.execute("echo $VARIABLE").await.unwrap().stdout;
         assert_eq!("\n", output);
     }
 
