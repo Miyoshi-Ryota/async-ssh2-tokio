@@ -675,7 +675,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
         )
         .await;
         if let Err(e) = &client {
-            println!("{:?}", e);
+            println!("{}", e);
         }
         assert!(client.is_ok());
     }
