@@ -11,7 +11,7 @@ docker-compose -f ./tests/docker-compose.yml build --no-cache || exit 1
 
 docker-compose -f ./tests/docker-compose.yml up -d || exit 1
 
-docker-compose -f ./tests/docker-compose.yml exec -T async-ssh2-tokio cargo test -- --test-threads=2
+docker-compose -f ./tests/docker-compose.yml exec -T async-ssh2-tokio cargo test -- --test-threads=2 --nocapture
 RET=$?
 
 docker-compose -f ./tests/docker-compose.yml down

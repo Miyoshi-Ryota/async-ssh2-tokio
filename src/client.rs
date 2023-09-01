@@ -664,4 +664,19 @@ ASYNC_SSH2_TEST_SERVER_PUB
         .await;
         assert!(client.is_ok());
     }
+
+    #[tokio::test]
+    async fn cannot_connect_with_dsa_key() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_key_file(&"/root/.ssh/id_dsa", None),
+            ServerCheckMethod::with_public_key_file(&env("ASYNC_SSH2_TEST_SERVER_PUB")),
+        )
+        .await;
+        if let Err(e) = &client {
+            println!("{:?}", e);
+        }
+        assert!(client.is_ok());
+    }
 }
