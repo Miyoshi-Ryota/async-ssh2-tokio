@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use russh::client::{Config, Handle, Handler};
 use std::io::{self, Write};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::ToSocketAddrsWithHostname;
