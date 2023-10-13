@@ -115,18 +115,18 @@ impl Client {
     /// Authentification is tried on the first successful connection and the whole
     /// process aborted if this fails.
     pub async fn connect(
-        addr: impl ToSocketAddrs,
+        socket: (&str, u16),
         username: &str,
         auth: AuthMethod,
         server_check: ServerCheckMethod,
     ) -> Result<Self, crate::Error> {
-        Self::connect_with_config(addr, username, auth, server_check, Config::default()).await
+        Self::connect_with_config(socket, username, auth, server_check, Config::default()).await
     }
 
     /// Same as `connect`, but with the option to specify a non default
     /// [`russh::client::Config`].
     pub async fn connect_with_config(
-        addr: impl ToSocketAddrs,
+        socket: (&str, u16),
         username: &str,
         auth: AuthMethod,
         server_check: ServerCheckMethod,
@@ -135,7 +135,7 @@ impl Client {
         let config = Arc::new(config);
 
         // Connection code inspired from std::net::TcpStream::connect and std::net::each_addr
-        let addrs = match addr.to_socket_addrs() {
+        let addrs = match socket.to_socket_addrs() {
             Ok(addrs) => addrs,
             Err(e) => return Err(crate::Error::AddressInvalid(e)),
         };
@@ -145,6 +145,7 @@ impl Client {
         )));
         for addr in addrs {
             let handler = ClientHandler {
+                hostname: socket.0.to_owned(),
                 host: addr,
                 server_check: server_check.clone(),
             };
@@ -313,6 +314,7 @@ pub struct CommandExecutedResult {
 
 #[derive(Clone)]
 struct ClientHandler {
+    hostname: String,
     host: SocketAddr,
     server_check: ServerCheckMethod,
 }
@@ -341,7 +343,7 @@ impl Handler for ClientHandler {
             }
             ServerCheckMethod::KnownHostsFile(known_hosts_path) => {
                 let result = russh_keys::check_known_hosts_path(
-                    &self.host.ip().to_string(),
+                    &self.hostname,
                     self.host.port(),
                     server_public_key,
                     known_hosts_path,
@@ -352,7 +354,7 @@ impl Handler for ClientHandler {
             }
             ServerCheckMethod::DefaultKnownHostsFile => {
                 let result = russh_keys::check_known_hosts(
-                    &self.host.ip().to_string(),
+                    &self.hostname,
                     self.host.port(),
                     server_public_key,
                 )
