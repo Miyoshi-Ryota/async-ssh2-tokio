@@ -137,7 +137,7 @@ impl Client {
         let config = Arc::new(config);
 
         // Connection code inspired from std::net::TcpStream::connect and std::net::each_addr
-        let addrs = match addr.to_socket_addrs() {
+        let socket_addrs = match addr.to_socket_addrs() {
             Ok(addrs) => addrs,
             Err(e) => return Err(crate::Error::AddressInvalid(e)),
         };
@@ -145,15 +145,15 @@ impl Client {
             io::ErrorKind::InvalidInput,
             "could not resolve to any addresses",
         )));
-        for addr in addrs {
+        for socket_addr in socket_addrs {
             let handler = ClientHandler {
                 hostname: addr.hostname(),
-                host: addr,
+                host: socket_addr,
                 server_check: server_check.clone(),
             };
-            match russh::client::connect(config.clone(), addr, handler).await {
+            match russh::client::connect(config.clone(), socket_addr, handler).await {
                 Ok(h) => {
-                    connect_res = Ok((addr, h));
+                    connect_res = Ok((socket_addr, h));
                     break;
                 }
                 Err(e) => connect_res = Err(e),
