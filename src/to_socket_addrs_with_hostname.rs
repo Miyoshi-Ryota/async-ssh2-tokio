@@ -1,7 +1,5 @@
-
-use std::net::{SocketAddr, ToSocketAddrs, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::io;
-
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 
 pub trait ToSocketAddrsWithHostname {
     fn to_socket_addrs(&self) -> io::Result<Vec<SocketAddr>>;

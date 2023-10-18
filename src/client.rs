@@ -109,8 +109,9 @@ impl Client {
     /// Open a ssh connection to a remote host.
     ///
     /// `addr` is an address of the remote host. Anything which implements
-    /// [`ToSocketAddrs`] trait can be supplied for the address; see this trait
-    /// documentation for concrete examples.
+    /// [`ToSocketAddrsWithHostname`] trait can be supplied for the address;
+    /// ToSocketAddrsWithHostname reimplements all of [`ToSocketAddrs`];
+    /// see this trait's documentation for concrete examples.
     ///
     /// If `addr` yields multiple addresses, `connect` will be attempted with
     /// each of the addresses until a connection is successful.
