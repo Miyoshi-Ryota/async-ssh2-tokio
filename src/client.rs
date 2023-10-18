@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use russh::client::{Config, Handle, Handler};
 use std::io::{self, Write};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::sync::Arc;
+
+use crate::ToSocketAddrsWithHostname;
 
 /// An authentification token, currently only by password.
 ///
@@ -107,15 +109,16 @@ impl Client {
     /// Open a ssh connection to a remote host.
     ///
     /// `addr` is an address of the remote host. Anything which implements
-    /// [`ToSocketAddrs`] trait can be supplied for the address; see this trait
-    /// documentation for concrete examples.
+    /// [`ToSocketAddrsWithHostname`] trait can be supplied for the address;
+    /// ToSocketAddrsWithHostname reimplements all of [`ToSocketAddrs`];
+    /// see this trait's documentation for concrete examples.
     ///
     /// If `addr` yields multiple addresses, `connect` will be attempted with
     /// each of the addresses until a connection is successful.
     /// Authentification is tried on the first successful connection and the whole
     /// process aborted if this fails.
     pub async fn connect(
-        addr: impl ToSocketAddrs,
+        addr: impl ToSocketAddrsWithHostname,
         username: &str,
         auth: AuthMethod,
         server_check: ServerCheckMethod,
@@ -126,7 +129,7 @@ impl Client {
     /// Same as `connect`, but with the option to specify a non default
     /// [`russh::client::Config`].
     pub async fn connect_with_config(
-        addr: impl ToSocketAddrs,
+        addr: impl ToSocketAddrsWithHostname,
         username: &str,
         auth: AuthMethod,
         server_check: ServerCheckMethod,
@@ -135,7 +138,7 @@ impl Client {
         let config = Arc::new(config);
 
         // Connection code inspired from std::net::TcpStream::connect and std::net::each_addr
-        let addrs = match addr.to_socket_addrs() {
+        let socket_addrs = match addr.to_socket_addrs() {
             Ok(addrs) => addrs,
             Err(e) => return Err(crate::Error::AddressInvalid(e)),
         };
@@ -143,14 +146,15 @@ impl Client {
             io::ErrorKind::InvalidInput,
             "could not resolve to any addresses",
         )));
-        for addr in addrs {
+        for socket_addr in socket_addrs {
             let handler = ClientHandler {
-                host: addr,
+                hostname: addr.hostname(),
+                host: socket_addr,
                 server_check: server_check.clone(),
             };
-            match russh::client::connect(config.clone(), addr, handler).await {
+            match russh::client::connect(config.clone(), socket_addr, handler).await {
                 Ok(h) => {
-                    connect_res = Ok((addr, h));
+                    connect_res = Ok((socket_addr, h));
                     break;
                 }
                 Err(e) => connect_res = Err(e),
@@ -313,6 +317,7 @@ pub struct CommandExecutedResult {
 
 #[derive(Clone)]
 struct ClientHandler {
+    hostname: String,
     host: SocketAddr,
     server_check: ServerCheckMethod,
 }
@@ -341,7 +346,7 @@ impl Handler for ClientHandler {
             }
             ServerCheckMethod::KnownHostsFile(known_hosts_path) => {
                 let result = russh_keys::check_known_hosts_path(
-                    &self.host.ip().to_string(),
+                    &self.hostname,
                     self.host.port(),
                     server_public_key,
                     known_hosts_path,
@@ -352,7 +357,7 @@ impl Handler for ClientHandler {
             }
             ServerCheckMethod::DefaultKnownHostsFile => {
                 let result = russh_keys::check_known_hosts(
-                    &self.host.ip().to_string(),
+                    &self.hostname,
                     self.host.port(),
                     server_public_key,
                 )
