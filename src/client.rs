@@ -99,8 +99,9 @@ impl ServerCheckMethod {
 ///
 ///     Ok(())
 /// }
+#[derive(Clone)]
 pub struct Client {
-    connection_handle: Handle<ClientHandler>,
+    connection_handle: Arc<Handle<ClientHandler>>,
     username: String,
     address: SocketAddr,
 }
@@ -166,7 +167,7 @@ impl Client {
         Self::authenticate(&mut handle, &username, auth).await?;
 
         Ok(Self {
-            connection_handle: handle,
+            connection_handle: Arc::new(handle),
             username,
             address,
         })
