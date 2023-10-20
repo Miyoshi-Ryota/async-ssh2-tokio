@@ -8,12 +8,15 @@ ENV ASYNC_SSH2_TEST_CLIENT_PROT_PRIV=/root/.ssh/prot.id_ed25519
 ENV ASYNC_SSH2_TEST_CLIENT_PROT_PASS=test
 ENV ASYNC_SSH2_TEST_SERVER_PUB=/root/server.ed25519.pub
 ENV ASYNC_SSH2_TEST_HOST_PORT=22
+ENV ASYNC_SSH2_TEST_HOST_NAME=ssh-server
+ENV ASYNC_SSH2_TEST_KNOWN_HOSTS=/root/.ssh/known_hosts
 
 COPY tests/async-ssh2-tokio/id_ed25519 /root/.ssh/id_ed25519
 COPY tests/async-ssh2-tokio/id_ed25519.pub /root/.ssh/id_ed25519.pub
 COPY tests/async-ssh2-tokio/prot.id_ed25519 /root/.ssh/prot.id_ed25519
 COPY tests/async-ssh2-tokio/prot.id_ed25519.pub /root/.ssh/prot.id_ed25519.pub
 COPY tests/async-ssh2-tokio/server.ed25519.pub /root/server.ed25519.pub
+COPY tests/async-ssh2-tokio/known_hosts /root/.ssh/known_hosts
 
 WORKDIR /async-ssh2-tokio
 COPY . .

@@ -401,6 +401,13 @@ ASYNC_SSH2_TEST_SERVER_PUB
         .unwrap()
     }
 
+    fn test_hostname() -> impl ToSocketAddrsWithHostname {
+        (
+            env("ASYNC_SSH2_TEST_HOST_NAME"),
+            env("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
+        )
+    }
+
     async fn establish_test_host_connection() -> Client {
         Client::connect(
             (
@@ -669,5 +676,41 @@ ASYNC_SSH2_TEST_SERVER_PUB
         )
         .await;
         assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn server_check_by_known_hosts_for_ip() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::with_known_hosts_file(&env("ASYNC_SSH2_TEST_KNOWN_HOSTS")),
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn server_check_by_known_hosts_for_hostname() {
+        let client = Client::connect(
+            test_hostname(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::with_known_hosts_file(&env("ASYNC_SSH2_TEST_KNOWN_HOSTS")),
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn client_can_be_cloned() {
+        let client = establish_test_host_connection().await;
+        let client2 = client.clone();
+
+        let result1 = client.execute("echo test clone").await.unwrap();
+        let result2 = client2.execute("echo test clone2").await.unwrap();
+
+        assert_eq!(result1.stdout, "test clone\n");
+        assert_eq!(result2.stdout, "test clone2\n");
     }
 }

@@ -22,3 +22,9 @@ rm -f authorized_keys
 cat client.ed25519.pub >> authorized_keys
 cat client.prot.ed25519.pub >> authorized_keys
 mv authorized_keys sshd-test
+
+# setup known_hosts
+export ASYNC_SSH2_TEST_HOST_IP=10.10.10.2
+export ASYNC_SSH2_TEST_HOST_NAME=ssh-server
+awk -v IP=$ASYNC_SSH2_TEST_HOST_IP '{print IP, $1, $2}' server.ed25519.pub > async-ssh2-tokio/known_hosts
+awk -v HOST=$ASYNC_SSH2_TEST_HOST_NAME '{print HOST, $1, $2}' server.ed25519.pub >> async-ssh2-tokio/known_hosts
