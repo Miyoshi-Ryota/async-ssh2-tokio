@@ -701,4 +701,16 @@ ASYNC_SSH2_TEST_SERVER_PUB
         .await;
         assert!(client.is_ok());
     }
+
+    #[tokio::test]
+    async fn client_can_be_cloned() {
+        let client = establish_test_host_connection().await;
+        let client2 = client.clone();
+
+        let result1 = client.execute("echo test clone").await.unwrap();
+        let result2 = client2.execute("echo test clone2").await.unwrap();
+
+        assert_eq!(result1.stdout, "test clone\n");
+        assert_eq!(result2.stdout, "test clone2\n");
+    }
 }
