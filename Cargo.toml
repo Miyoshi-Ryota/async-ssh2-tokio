@@ -1,6 +1,6 @@
 [package]
 name = "async-ssh2-tokio"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 license-file = "LICENSE"
 readme = "README.md"
