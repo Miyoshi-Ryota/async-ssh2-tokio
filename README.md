@@ -53,11 +53,7 @@ async fn main() -> Result<(), async_ssh2_tokio::Error> {
 ```
 
 ## Running Tests
-In order to run the tests, either set up docker compose on your machine
-or set the following environment variables for a working ssh host:
+1. install docker and docker-compose
+1. run shellscript `./tests/run_unit_tests.sh`
 
-* `ASYNC_SSH2_TEST_HOST_IP`: The ip, e.g. `127.0.0.1` when testing with localhost.
-* `ASYNC_SSH2_TEST_HOST_USER`: The username to connect as.
-* `ASYNC_SSH2_TEST_HOST_PW`: The corresponding password. Since this is plain text, creating a new unpriviledged user is recommended.
-
-Note: The doc tests do not use these variables and are therefore not run, but only compiled.
+Note: Above test script only works on x86_64 Linux or Mac. I have confirmed that it does not work on Apple silicon Mac.
