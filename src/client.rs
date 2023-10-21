@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use russh::client::{Config, Handle, Handler};
+use std::fmt::Debug;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -306,6 +307,16 @@ impl Client {
     }
 }
 
+impl Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("username", &self.username)
+            .field("address", &self.address)
+            .field("connection_handle", &"Handle<ClientHandler>")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommandExecutedResult {
     /// The stdout output of the command.
@@ -316,7 +327,7 @@ pub struct CommandExecutedResult {
     pub exit_status: u32,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct ClientHandler {
     hostname: String,
     host: SocketAddr,
