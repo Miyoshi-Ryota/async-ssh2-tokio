@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use russh::client::{Config, Handle, Handler};
+use russh::{
+    client::{Config, Handle, Handler, Msg},
+    Channel,
+};
 use std::fmt::Debug;
 use std::io::{self, Write};
 use std::net::SocketAddr;
@@ -224,6 +227,13 @@ impl Client {
                 }
             }
         }
+    }
+
+    pub async fn get_channel(&self) -> Result<Channel<Msg>, crate::Error> {
+        self.connection_handle
+            .channel_open_session()
+            .await
+            .map_err(|err| crate::Error::SshError(err))
     }
 
     /// Execute a remote command via the ssh connection.
