@@ -305,6 +305,10 @@ impl Client {
             Err(e) => Err(e),
         }
     }
+
+    pub fn is_closed(&self) -> bool {
+        self.connection_handle.is_closed()
+    }
 }
 
 impl Debug for Client {
