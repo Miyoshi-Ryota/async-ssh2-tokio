@@ -2,6 +2,7 @@
 version: "3.9"
 services:
   ssh-server:
+    platform: linux/amd64
     build:
       context: ./sshd-test
     container_name: ssh-server
