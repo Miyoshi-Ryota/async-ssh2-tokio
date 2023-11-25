@@ -55,5 +55,3 @@ async fn main() -> Result<(), async_ssh2_tokio::Error> {
 ## Running Tests
 1. install docker and docker-compose
 1. run shellscript `./tests/run_unit_tests.sh`
-
-Note: Above test script only works on x86_64 Linux or Mac. I have confirmed that it does not work on Apple silicon Mac.
