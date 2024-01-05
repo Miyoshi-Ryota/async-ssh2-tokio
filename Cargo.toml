@@ -16,8 +16,8 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 openssl = ["russh/openssl"]
 
 [dependencies]
-russh = "0.38.0"
-russh-keys = "0.38.0"
+russh = "0.40.2"
+russh-keys = "0.40.1"
 thiserror = "1.0"
 async-trait = "0.1.61"
 
