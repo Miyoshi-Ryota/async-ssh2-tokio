@@ -305,14 +305,14 @@ impl Client {
         &self.address
     }
 
-    pub async fn disconnect(&self) -> Result<(), russh::Error> {
+    pub async fn disconnect(&self) -> Result<(), crate::Error> {
         match self
             .connection_handle
             .disconnect(russh::Disconnect::ByApplication, "", "")
             .await
         {
             Ok(()) => Ok(()),
-            Err(e) => Err(e),
+            Err(e) => Err(crate::Error::SshError(e)),
         }
     }
 
