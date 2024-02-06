@@ -1,8 +1,8 @@
 # async-ssh2-tokio
 ![Unit Test Status](https://github.com/Miyoshi-Ryota/async-ssh2-tokio/actions/workflows/ci.yml/badge.svg)
 ![Lint Status](https://github.com/Miyoshi-Ryota/async-ssh2-tokio/actions/workflows/super_lint.yml/badge.svg)
-[Docs.rs](https://docs.rs/async-ssh2-tokio/latest/async_ssh2_tokio/),
-[Crates.io](https://crates.io/crates/async-ssh2-tokio)
+[![Docs.rs](https://docs.rs/async-ssh2-tokio/badge.svg)](https://docs.rs/async-ssh2-tokio/latest/async_ssh2_tokio/)
+[![Crates.io](https://img.shields.io/crates/v/async-ssh2-tokio.svg)](https://crates.io/crates/async-ssh2-tokio)
 
 This library is an asynchronous and easy-to-use high level ssh client library
 for rust with the tokio runtime. Powered by the rust ssh implementation
@@ -18,7 +18,7 @@ for rust with the tokio runtime. Powered by the rust ssh implementation
 ```rust
 [dependencies]
 tokio = "1"
-async-ssh2-tokio = "0.8.1"
+async-ssh2-tokio = "0.8.5"
 ```
 
 ## Usage
@@ -55,5 +55,3 @@ async fn main() -> Result<(), async_ssh2_tokio::Error> {
 ## Running Tests
 1. install docker and docker-compose
 1. run shellscript `./tests/run_unit_tests.sh`
-
-Note: Above test script only works on x86_64 Linux or Mac. I have confirmed that it does not work on Apple silicon Mac.

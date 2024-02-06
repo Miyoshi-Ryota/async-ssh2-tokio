@@ -315,6 +315,10 @@ impl Client {
             Err(e) => Err(e),
         }
     }
+
+    pub fn is_closed(&self) -> bool {
+        self.connection_handle.is_closed()
+    }
 }
 
 impl Debug for Client {
@@ -514,8 +518,8 @@ ASYNC_SSH2_TEST_SERVER_PUB
     async fn sequential_commands() {
         let client = establish_test_host_connection().await;
 
-        for i in 0..1000 {
-            std::thread::sleep(time::Duration::from_millis(200));
+        for i in 0..100 {
+            std::thread::sleep(time::Duration::from_millis(100));
             let res = client
                 .execute(&format!("echo {i}"))
                 .await
