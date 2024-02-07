@@ -143,10 +143,9 @@ impl Client {
         let config = Arc::new(config);
 
         // Connection code inspired from std::net::TcpStream::connect and std::net::each_addr
-        let socket_addrs = match addr.to_socket_addrs() {
-            Ok(addrs) => addrs,
-            Err(e) => return Err(crate::Error::AddressInvalid(e)),
-        };
+        let socket_addrs = addr
+            .to_socket_addrs()
+            .map_err(crate::Error::AddressInvalid)?;
         let mut connect_res = Err(crate::Error::AddressInvalid(io::Error::new(
             io::ErrorKind::InvalidInput,
             "could not resolve to any addresses",
@@ -186,54 +185,42 @@ impl Client {
         match auth {
             AuthMethod::Password(password) => {
                 let is_authentificated = handle.authenticate_password(username, password).await?;
-                if is_authentificated {
-                    Ok(())
-                } else {
-                    Err(crate::Error::PasswordWrong)
+                if !is_authentificated {
+                    return Err(crate::Error::PasswordWrong);
                 }
             }
             AuthMethod::PrivateKey { key_data, key_pass } => {
-                let cprivk =
-                    match russh_keys::decode_secret_key(key_data.as_str(), key_pass.as_deref()) {
-                        Ok(kp) => kp,
-                        Err(e) => return Err(crate::Error::KeyInvalid(e)),
-                    };
-
+                let cprivk = russh_keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
+                    .map_err(crate::Error::KeyInvalid)?;
                 let is_authentificated = handle
                     .authenticate_publickey(username, Arc::new(cprivk))
                     .await?;
-                if is_authentificated {
-                    Ok(())
-                } else {
-                    Err(crate::Error::KeyAuthFailed)
+                if !is_authentificated {
+                    return Err(crate::Error::KeyAuthFailed);
                 }
             }
             AuthMethod::PrivateKeyFile {
                 key_file_name,
                 key_pass,
             } => {
-                let cprivk = match russh_keys::load_secret_key(key_file_name, key_pass.as_deref()) {
-                    Ok(kp) => kp,
-                    Err(e) => return Err(crate::Error::KeyInvalid(e)),
-                };
-
+                let cprivk = russh_keys::load_secret_key(key_file_name, key_pass.as_deref())
+                    .map_err(crate::Error::KeyInvalid)?;
                 let is_authentificated = handle
                     .authenticate_publickey(username, Arc::new(cprivk))
                     .await?;
-                if is_authentificated {
-                    Ok(())
-                } else {
-                    Err(crate::Error::KeyAuthFailed)
+                if !is_authentificated {
+                    return Err(crate::Error::KeyAuthFailed);
                 }
             }
-        }
+        };
+        Ok(())
     }
 
     pub async fn get_channel(&self) -> Result<Channel<Msg>, crate::Error> {
         self.connection_handle
             .channel_open_session()
             .await
-            .map_err(|err| crate::Error::SshError(err))
+            .map_err(crate::Error::SshError)
     }
 
     /// Execute a remote command via the ssh connection.
@@ -282,11 +269,11 @@ impl Client {
         }
 
         // If we received an exit code, report it back
-        if result.is_some() {
+        if let Some(result) = result {
             Ok(CommandExecutedResult {
                 stdout: String::from_utf8_lossy(&stdout_buffer).to_string(),
                 stderr: String::from_utf8_lossy(&stderr_buffer).to_string(),
-                exit_status: result.unwrap(),
+                exit_status: result,
             })
 
         // Otherwise, report an error
@@ -306,14 +293,10 @@ impl Client {
     }
 
     pub async fn disconnect(&self) -> Result<(), crate::Error> {
-        match self
-            .connection_handle
+        self.connection_handle
             .disconnect(russh::Disconnect::ByApplication, "", "")
             .await
-        {
-            Ok(()) => Ok(()),
-            Err(e) => Err(crate::Error::SshError(e)),
-        }
+            .map_err(crate::Error::SshError)
     }
 
     pub fn is_closed(&self) -> bool {
@@ -523,7 +506,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
             let res = client
                 .execute(&format!("echo {i}"))
                 .await
-                .expect(&format!("Execution failed in iteration {i}"));
+                .unwrap_or_else(|_| panic!("Execution failed in iteration {i}"));
             assert_eq!(format!("{i}\n"), res.stdout);
         }
     }
@@ -566,8 +549,7 @@ ASYNC_SSH2_TEST_SERVER_PUB
             ServerCheckMethod::NoCheck,
         )
         .await
-        .err()
-        .expect("Client connected with wrong password");
+        .expect_err("Client connected with wrong password");
 
         match error {
             crate::Error::PasswordWrong => {}
