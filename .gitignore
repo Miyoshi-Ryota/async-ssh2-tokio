@@ -7,3 +7,4 @@ authorized_keys
 *id_ed25519*
 ssh_host_*_key*
 known_hosts
+/.idea/

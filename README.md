@@ -10,12 +10,12 @@ for rust with the tokio runtime. Powered by the rust ssh implementation
 
 
 ## Features
-* Connect to a SSH Host
+* Connect to an SSH Host
 * Execute commands on the remote host
 * Get the stdout and exit code of the command
 
 ## Install
-```rust
+```toml
 [dependencies]
 tokio = "1"
 async-ssh2-tokio = "0.8.7"
@@ -54,4 +54,4 @@ async fn main() -> Result<(), async_ssh2_tokio::Error> {
 
 ## Running Tests
 1. install docker and docker-compose
-1. run shellscript `./tests/run_unit_tests.sh`
+2. run shell script `./tests/run_unit_tests.sh`
