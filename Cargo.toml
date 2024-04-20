@@ -17,7 +17,7 @@ openssl = ["russh/openssl"]
 
 [dependencies]
 russh = { git = "https://github.com/chanderlud/russh" }
-russh-keys = "0.40.1"
+russh-keys = "0.43.0"
 thiserror = "1.0"
 async-trait = "0.1.61"
 
