@@ -21,4 +21,8 @@ pub enum Error {
     ServerCheckFailed,
     #[error("Ssh error occured: {0}")]
     SshError(#[from] russh::Error),
+    #[error("Send error")]
+    SendError(#[from] russh::SendError),
+    #[error("Agent auth error")]
+    AgentAuthError(#[from] russh::AgentAuthError),
 }

@@ -26,6 +26,9 @@ pub enum AuthMethod {
         key_file_name: String,
         key_pass: Option<String>,
     },
+    PublicKeyFile {
+        key_file_name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -56,6 +59,12 @@ impl AuthMethod {
         Self::PrivateKeyFile {
             key_file_name: key_file_name.to_string(),
             key_pass: passphrase.map(str::to_string),
+        }
+    }
+
+    pub fn with_public_key_file(key_file_name: &str) -> Self {
+        Self::PublicKeyFile {
+            key_file_name: key_file_name.to_string(),
         }
     }
 }
@@ -209,6 +218,33 @@ impl Client {
                     .authenticate_publickey(username, Arc::new(cprivk))
                     .await?;
                 if !is_authentificated {
+                    return Err(crate::Error::KeyAuthFailed);
+                }
+            }
+            AuthMethod::PublicKeyFile { key_file_name } => {
+                let cpubk =
+                    russh_keys::load_public_key(key_file_name).map_err(crate::Error::KeyInvalid)?;
+                let mut agent = russh_keys::agent::client::AgentClient::connect_env()
+                    .await
+                    .unwrap();
+                let mut auth_identity: Option<russh_keys::key::PublicKey> = None;
+                for identity in agent
+                    .request_identities()
+                    .await
+                    .map_err(crate::Error::KeyInvalid)?
+                {
+                    if identity == cpubk {
+                        auth_identity = Some(identity.clone());
+                        break;
+                    }
+                }
+
+                if auth_identity.is_none() {
+                    return Err(crate::Error::KeyAuthFailed);
+                }
+
+                let (_a, fut_res) = handle.authenticate_future(username, cpubk, agent).await;
+                if !fut_res.map_err(crate::Error::AgentAuthError)? {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
