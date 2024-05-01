@@ -272,7 +272,7 @@ impl Client {
         let sftp = SftpSession::new(channel.into_stream()).await?;
 
         // read file contents locally
-        let file_contents = std::fs::read(src_file_path).map_err(crate::Error::IoError)?;
+        let file_contents = tokio::fs::read(src_file_path).await.map_err(crate::Error::IoError)?;
 
         // interaction with i/o
         let mut file = sftp
