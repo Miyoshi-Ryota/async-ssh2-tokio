@@ -3,10 +3,12 @@ use russh::{
     client::{Config, Handle, Handler, Msg},
     Channel,
 };
+use russh_sftp::{client::SftpSession, protocol::OpenFlags};
 use std::fmt::Debug;
-use std::io::{self, Write};
+use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 use crate::ToSocketAddrsWithHostname;
 
@@ -259,6 +261,35 @@ impl Client {
             .map_err(crate::Error::SshError)
     }
 
+    pub async fn upload_file(
+        &self,
+        src_file_path: &str,
+        dest_file_path: &str,
+    ) -> Result<(), crate::Error> {
+        // start sftp session
+        let channel = self.get_channel().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        let sftp = SftpSession::new(channel.into_stream()).await?;
+
+        // read file contents locally
+        let file_contents = std::fs::read(src_file_path).map_err(crate::Error::IoError)?;
+
+        // interaction with i/o
+        let mut file = sftp
+            .open_with_flags(
+                dest_file_path,
+                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE | OpenFlags::READ,
+            )
+            .await?;
+        file.write_all(&file_contents)
+            .await
+            .map_err(crate::Error::IoError)?;
+        file.flush().await.map_err(crate::Error::IoError)?;
+        file.shutdown().await.map_err(crate::Error::IoError)?;
+
+        Ok(())
+    }
+
     /// Execute a remote command via the ssh connection.
     ///
     /// Returns stdout, stderr and the exit code of the command,
@@ -284,10 +315,12 @@ impl Client {
             //dbg!(&msg);
             match msg {
                 // If we get data, add it to the buffer
-                russh::ChannelMsg::Data { ref data } => stdout_buffer.write_all(data).unwrap(),
+                russh::ChannelMsg::Data { ref data } => {
+                    stdout_buffer.write_all(data).await.unwrap()
+                }
                 russh::ChannelMsg::ExtendedData { ref data, ext } => {
                     if ext == 1 {
-                        stderr_buffer.write_all(data).unwrap()
+                        stderr_buffer.write_all(data).await.unwrap()
                     }
                 }
 
