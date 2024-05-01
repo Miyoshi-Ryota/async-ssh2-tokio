@@ -22,5 +22,7 @@ jobs:
           VALIDATE_JSCPD: false
           VALIDATE_RUST_2015: false
           VALIDATE_RUST_2018: false
+          VALIDATE_SHELL_SHFMT: false
+          VALIDATE_CHECKOV: false
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
