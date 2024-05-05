@@ -803,7 +803,10 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
     #[tokio::test]
     async fn client_can_upload_file() {
         let client = establish_test_host_connection().await;
-        let _ = client.upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded").await.unwrap();
+        let _ = client
+            .upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded")
+            .await
+            .unwrap();
         let result = client.execute("cat /tmp/uploaded").await.unwrap();
         assert_eq!(result.stdout, "this is a test file\n");
     }
