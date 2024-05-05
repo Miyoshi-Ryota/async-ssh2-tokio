@@ -18,12 +18,13 @@ for rust with the tokio runtime. Powered by the rust ssh implementation
 ```toml
 [dependencies]
 tokio = "1"
-async-ssh2-tokio = "0.8.8"
+async-ssh2-tokio = "0.8.9"
 ```
 
 ## Usage
 ```rust
 use async_ssh2_tokio::client::{Client, AuthMethod, ServerCheckMethod};
+
 #[tokio::main]
 async fn main() -> Result<(), async_ssh2_tokio::Error> {
     // if you want to use key auth, then use following:

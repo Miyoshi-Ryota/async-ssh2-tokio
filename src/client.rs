@@ -261,6 +261,13 @@ impl Client {
             .map_err(crate::Error::SshError)
     }
 
+    /// Upload a file with sftp to the remote server.
+    ///
+    /// `src_file_path` is the path to the file on the local machine.
+    /// `dest_file_path` is the path to the file on the remote machine.
+    /// Some sshd_config does not enable sftp by default, so make sure it is enabled.
+    /// A config line like a `Subsystem sftp internal-sftp` or
+    /// `Subsystem sftp /usr/lib/openssh/sftp-server` is needed in the sshd_config in remote machine.
     pub async fn upload_file(
         &self,
         src_file_path: &str,
@@ -466,6 +473,7 @@ ASYNC_SSH2_TEST_CLIENT_PROT_PRIV
 ASYNC_SSH2_TEST_CLIENT_PRIV
 ASYNC_SSH2_TEST_CLIENT_PROT_PASS
 ASYNC_SSH2_TEST_SERVER_PUB
+ASYNC_SSH2_TEST_UPLOAD_FILE
 ",
         )
     }
@@ -790,5 +798,16 @@ ASYNC_SSH2_TEST_SERVER_PUB
 
         assert_eq!(result1.stdout, "test clone\n");
         assert_eq!(result2.stdout, "test clone2\n");
+    }
+
+    #[tokio::test]
+    async fn client_can_upload_file() {
+        let client = establish_test_host_connection().await;
+        let _ = client
+            .upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded")
+            .await
+            .unwrap();
+        let result = client.execute("cat /tmp/uploaded").await.unwrap();
+        assert_eq!(result.stdout, "this is a test file\n");
     }
 }
