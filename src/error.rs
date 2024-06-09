@@ -21,4 +21,12 @@ pub enum Error {
     ServerCheckFailed,
     #[error("Ssh error occured: {0}")]
     SshError(#[from] russh::Error),
+    #[error("Send error")]
+    SendError(#[from] russh::SendError),
+    #[error("Agent auth error")]
+    AgentAuthError(#[from] russh::AgentAuthError),
+    #[error("SFTP error occured: {0}")]
+    SftpError(#[from] russh_sftp::client::error::Error),
+    #[error("I/O error")]
+    IoError(#[from] io::Error),
 }

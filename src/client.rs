@@ -3,10 +3,12 @@ use russh::{
     client::{Config, Handle, Handler, Msg},
     Channel,
 };
+use russh_sftp::{client::SftpSession, protocol::OpenFlags};
 use std::fmt::Debug;
-use std::io::{self, Write};
+use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 use crate::ToSocketAddrsWithHostname;
 
@@ -25,6 +27,9 @@ pub enum AuthMethod {
     PrivateKeyFile {
         key_file_name: String,
         key_pass: Option<String>,
+    },
+    PublicKeyFile {
+        key_file_name: String,
     },
 }
 
@@ -56,6 +61,12 @@ impl AuthMethod {
         Self::PrivateKeyFile {
             key_file_name: key_file_name.to_string(),
             key_pass: passphrase.map(str::to_string),
+        }
+    }
+
+    pub fn with_public_key_file(key_file_name: &str) -> Self {
+        Self::PublicKeyFile {
+            key_file_name: key_file_name.to_string(),
         }
     }
 }
@@ -212,6 +223,33 @@ impl Client {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
+            AuthMethod::PublicKeyFile { key_file_name } => {
+                let cpubk =
+                    russh_keys::load_public_key(key_file_name).map_err(crate::Error::KeyInvalid)?;
+                let mut agent = russh_keys::agent::client::AgentClient::connect_env()
+                    .await
+                    .unwrap();
+                let mut auth_identity: Option<russh_keys::key::PublicKey> = None;
+                for identity in agent
+                    .request_identities()
+                    .await
+                    .map_err(crate::Error::KeyInvalid)?
+                {
+                    if identity == cpubk {
+                        auth_identity = Some(identity.clone());
+                        break;
+                    }
+                }
+
+                if auth_identity.is_none() {
+                    return Err(crate::Error::KeyAuthFailed);
+                }
+
+                let (_a, fut_res) = handle.authenticate_future(username, cpubk, agent).await;
+                if !fut_res.map_err(crate::Error::AgentAuthError)? {
+                    return Err(crate::Error::KeyAuthFailed);
+                }
+            }
         };
         Ok(())
     }
@@ -221,6 +259,44 @@ impl Client {
             .channel_open_session()
             .await
             .map_err(crate::Error::SshError)
+    }
+
+    /// Upload a file with sftp to the remote server.
+    ///
+    /// `src_file_path` is the path to the file on the local machine.
+    /// `dest_file_path` is the path to the file on the remote machine.
+    /// Some sshd_config does not enable sftp by default, so make sure it is enabled.
+    /// A config line like a `Subsystem sftp internal-sftp` or
+    /// `Subsystem sftp /usr/lib/openssh/sftp-server` is needed in the sshd_config in remote machine.
+    pub async fn upload_file(
+        &self,
+        src_file_path: &str,
+        dest_file_path: &str,
+    ) -> Result<(), crate::Error> {
+        // start sftp session
+        let channel = self.get_channel().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        let sftp = SftpSession::new(channel.into_stream()).await?;
+
+        // read file contents locally
+        let file_contents = tokio::fs::read(src_file_path)
+            .await
+            .map_err(crate::Error::IoError)?;
+
+        // interaction with i/o
+        let mut file = sftp
+            .open_with_flags(
+                dest_file_path,
+                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE | OpenFlags::READ,
+            )
+            .await?;
+        file.write_all(&file_contents)
+            .await
+            .map_err(crate::Error::IoError)?;
+        file.flush().await.map_err(crate::Error::IoError)?;
+        file.shutdown().await.map_err(crate::Error::IoError)?;
+
+        Ok(())
     }
 
     /// Execute a remote command via the ssh connection.
@@ -248,10 +324,12 @@ impl Client {
             //dbg!(&msg);
             match msg {
                 // If we get data, add it to the buffer
-                russh::ChannelMsg::Data { ref data } => stdout_buffer.write_all(data).unwrap(),
+                russh::ChannelMsg::Data { ref data } => {
+                    stdout_buffer.write_all(data).await.unwrap()
+                }
                 russh::ChannelMsg::ExtendedData { ref data, ext } => {
                     if ext == 1 {
-                        stderr_buffer.write_all(data).unwrap()
+                        stderr_buffer.write_all(data).await.unwrap()
                     }
                 }
 
@@ -395,6 +473,7 @@ ASYNC_SSH2_TEST_CLIENT_PROT_PRIV
 ASYNC_SSH2_TEST_CLIENT_PRIV
 ASYNC_SSH2_TEST_CLIENT_PROT_PASS
 ASYNC_SSH2_TEST_SERVER_PUB
+ASYNC_SSH2_TEST_UPLOAD_FILE
 ",
         )
     }
@@ -719,5 +798,16 @@ ASYNC_SSH2_TEST_SERVER_PUB
 
         assert_eq!(result1.stdout, "test clone\n");
         assert_eq!(result2.stdout, "test clone2\n");
+    }
+
+    #[tokio::test]
+    async fn client_can_upload_file() {
+        let client = establish_test_host_connection().await;
+        let _ = client
+            .upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded")
+            .await
+            .unwrap();
+        let result = client.execute("cat /tmp/uploaded").await.unwrap();
+        assert_eq!(result.stdout, "this is a test file\n");
     }
 }
