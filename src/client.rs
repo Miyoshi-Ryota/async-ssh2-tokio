@@ -414,22 +414,22 @@ impl Handler for ClientHandler {
     type Error = crate::Error;
 
     async fn check_server_key(
-        self,
+        &mut self,
         server_public_key: &russh_keys::key::PublicKey,
-    ) -> Result<(Self, bool), Self::Error> {
+    ) -> Result<bool, Self::Error> {
         match &self.server_check {
-            ServerCheckMethod::NoCheck => Ok((self, true)),
+            ServerCheckMethod::NoCheck => Ok(true),
             ServerCheckMethod::PublicKey(key) => {
                 let pk = russh_keys::parse_public_key_base64(key)
                     .map_err(|_| crate::Error::ServerCheckFailed)?;
 
-                Ok((self, pk == *server_public_key))
+                Ok(pk == *server_public_key)
             }
             ServerCheckMethod::PublicKeyFile(key_file_name) => {
                 let pk = russh_keys::load_public_key(key_file_name)
                     .map_err(|_| crate::Error::ServerCheckFailed)?;
 
-                Ok((self, pk == *server_public_key))
+                Ok(pk == *server_public_key)
             }
             ServerCheckMethod::KnownHostsFile(known_hosts_path) => {
                 let result = russh_keys::check_known_hosts_path(
@@ -440,7 +440,7 @@ impl Handler for ClientHandler {
                 )
                 .map_err(|_| crate::Error::ServerCheckFailed)?;
 
-                Ok((self, result))
+                Ok(result)
             }
             ServerCheckMethod::DefaultKnownHostsFile => {
                 let result = russh_keys::check_known_hosts(
@@ -450,7 +450,7 @@ impl Handler for ClientHandler {
                 )
                 .map_err(|_| crate::Error::ServerCheckFailed)?;
 
-                Ok((self, result))
+                Ok(result)
             }
         }
     }
