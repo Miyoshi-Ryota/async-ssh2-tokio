@@ -2,11 +2,15 @@ use std::io;
 
 /// This is the `thiserror` error for all crate errors.
 ///
-/// Most ssh related error are wrapped in the `SshError` variant,
+/// Most ssh related error is wrapped in the `SshError` variant,
 /// giving access to the underlying [`russh::Error`] type.
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("Keyboard-interactive authentication failed")]
+    KeyboardInteractiveAuthFailed,
+    #[error("No keyboard-interactive response for prompt: {0}")]
+    KeyboardInteractiveNoResponseForPrompt(String),
     #[error("Key authentication failed")]
     KeyAuthFailed,
     #[error("Unable to load key, bad format or passphrase: {0}")]
