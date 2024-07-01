@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use russh::client::KeyboardInteractiveAuthResponse;
 use russh::{
     client::{Config, Handle, Handler, Msg},
     Channel,
@@ -31,6 +32,15 @@ pub enum AuthMethod {
     PublicKeyFile {
         key_file_name: String,
     },
+    KeyboardInteractive(AuthKeyboardInteractive),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct AuthKeyboardInteractive {
+    /// Hnts to the server the preferred methods to be used for authentication.
+    submethods: Option<String>,
+    responses: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -68,6 +78,37 @@ impl AuthMethod {
         Self::PublicKeyFile {
             key_file_name: key_file_name.to_string(),
         }
+    }
+
+    pub fn with_keyboard_interactive(auth: AuthKeyboardInteractive) -> Self {
+        Self::KeyboardInteractive(auth)
+    }
+}
+
+impl AuthKeyboardInteractive {
+    pub fn new() -> Self {
+        Self {
+            submethods: None,
+            responses: vec![],
+        }
+    }
+
+    /// Hnts to the server the preferred methods to be used for authentication.
+    pub fn with_submethods(mut self, submethods: impl Into<String>) -> Self {
+        self.submethods = Some(submethods.into());
+        self
+    }
+
+    /// Add response to exact prompt.
+    pub fn with_response(mut self, prompt: impl Into<String>, response: impl Into<String>) -> Self {
+        self.responses.push((prompt.into(), response.into()));
+        self
+    }
+}
+
+impl From<AuthKeyboardInteractive> for AuthMethod {
+    fn from(value: AuthKeyboardInteractive) -> Self {
+        AuthMethod::with_keyboard_interactive(value)
     }
 }
 
@@ -248,6 +289,36 @@ impl Client {
                 let (_a, fut_res) = handle.authenticate_future(username, cpubk, agent).await;
                 if !fut_res.map_err(crate::Error::AgentAuthError)? {
                     return Err(crate::Error::KeyAuthFailed);
+                }
+            }
+            AuthMethod::KeyboardInteractive(mut kbd) => {
+                let mut res = handle
+                    .authenticate_keyboard_interactive_start(username, kbd.submethods)
+                    .await?;
+                loop {
+                    let prompts = match res {
+                        KeyboardInteractiveAuthResponse::Success => break,
+                        KeyboardInteractiveAuthResponse::Failure => {
+                            return Err(crate::Error::KeyboardInteractiveAuthFailed);
+                        }
+                        KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
+                    };
+
+                    let mut responses = vec![];
+                    for prompt in prompts {
+                        let Some(pos) = kbd.responses.iter().position(|(p, _)| p == &prompt.prompt)
+                        else {
+                            return Err(crate::Error::KeyboardInteractiveNoResponseForPrompt(
+                                prompt.prompt,
+                            ));
+                        };
+                        let (_, response) = kbd.responses.remove(pos);
+                        responses.push(response);
+                    }
+
+                    res = handle
+                        .authenticate_keyboard_interactive_respond(responses)
+                        .await?;
                 }
             }
         };
@@ -730,6 +801,60 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
         )
         .await;
         assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_keyboard_interactive() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthKeyboardInteractive::new()
+                .with_response("Password: ", env("ASYNC_SSH2_TEST_HOST_PW"))
+                .into(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_keyboard_interactive_wrong_response() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthKeyboardInteractive::new()
+                .with_response("Password: ", "wrong password")
+                .into(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        match client {
+            Err(crate::error::Error::KeyboardInteractiveAuthFailed) => {}
+            Err(e) => {
+                panic!("Expected KeyboardInteractiveAuthFailed error. Got error: {e:?}")
+            }
+            Ok(_) => panic!("Expected KeyboardInteractiveAuthFailed error."),
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_keyboard_interactive_no_response() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthKeyboardInteractive::new().into(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        match client {
+            Err(crate::error::Error::KeyboardInteractiveNoResponseForPrompt(prompt)) => {
+                assert_eq!(prompt, "Password: ");
+            }
+            Err(e) => {
+                panic!("Expected KeyboardInteractiveNoResponseForPrompt error. Got error: {e:?}")
+            }
+            Ok(_) => panic!("Expected KeyboardInteractiveNoResponseForPrompt error."),
+        }
     }
 
     #[tokio::test]
