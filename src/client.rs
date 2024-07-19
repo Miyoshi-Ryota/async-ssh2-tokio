@@ -261,6 +261,48 @@ impl Client {
             .map_err(crate::Error::SshError)
     }
 
+    /// Open a TCP/IP forwarding channel.
+    ///
+    /// This opens a `direct-tcpip` channel to the given target.
+    pub async fn open_direct_tcpip_channel<
+        T: ToSocketAddrsWithHostname,
+        S: Into<Option<SocketAddr>>,
+    >(
+        &self,
+        target: T,
+        src: S,
+    ) -> Result<Channel<Msg>, crate::Error> {
+        let targets = target
+            .to_socket_addrs()
+            .map_err(crate::Error::AddressInvalid)?;
+        let src = src
+            .into()
+            .map(|src| (src.ip().to_string(), src.port().into()))
+            .unwrap_or_else(|| ("127.0.0.1".to_string(), 22));
+
+        let mut connect_err = crate::Error::AddressInvalid(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "could not resolve to any addresses",
+        ));
+        for target in targets {
+            match self
+                .connection_handle
+                .channel_open_direct_tcpip(
+                    target.ip().to_string(),
+                    target.port().into(),
+                    src.0.clone(),
+                    src.1,
+                )
+                .await
+            {
+                Ok(channel) => return Ok(channel),
+                Err(err) => connect_err = crate::Error::SshError(err),
+            }
+        }
+
+        return Err(connect_err);
+    }
+
     /// Upload a file with sftp to the remote server.
     ///
     /// `src_file_path` is the path to the file on the local machine.
