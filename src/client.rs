@@ -4,10 +4,10 @@ use russh::{
     Channel,
 };
 use russh_sftp::{client::SftpSession, protocol::OpenFlags};
-use std::fmt::Debug;
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::{fmt::Debug, path::Path};
+use std::{io, path::PathBuf};
 use tokio::io::AsyncWriteExt;
 
 use crate::ToSocketAddrsWithHostname;
@@ -25,11 +25,11 @@ pub enum AuthMethod {
         key_pass: Option<String>,
     },
     PrivateKeyFile {
-        key_file_name: String,
+        key_file_path: PathBuf,
         key_pass: Option<String>,
     },
     PublicKeyFile {
-        key_file_name: String,
+        key_file_path: PathBuf,
     },
 }
 
@@ -57,16 +57,16 @@ impl AuthMethod {
         }
     }
 
-    pub fn with_key_file(key_file_name: &str, passphrase: Option<&str>) -> Self {
+    pub fn with_key_file<T: AsRef<Path>>(key_file_path: T, passphrase: Option<&str>) -> Self {
         Self::PrivateKeyFile {
-            key_file_name: key_file_name.to_string(),
+            key_file_path: key_file_path.as_ref().to_path_buf(),
             key_pass: passphrase.map(str::to_string),
         }
     }
 
-    pub fn with_public_key_file(key_file_name: &str) -> Self {
+    pub fn with_public_key_file<T: AsRef<Path>>(key_file_path: T) -> Self {
         Self::PublicKeyFile {
-            key_file_name: key_file_name.to_string(),
+            key_file_path: key_file_path.as_ref().to_path_buf(),
         }
     }
 }
@@ -211,10 +211,10 @@ impl Client {
                 }
             }
             AuthMethod::PrivateKeyFile {
-                key_file_name,
+                key_file_path,
                 key_pass,
             } => {
-                let cprivk = russh_keys::load_secret_key(key_file_name, key_pass.as_deref())
+                let cprivk = russh_keys::load_secret_key(key_file_path, key_pass.as_deref())
                     .map_err(crate::Error::KeyInvalid)?;
                 let is_authentificated = handle
                     .authenticate_publickey(username, Arc::new(cprivk))
@@ -223,9 +223,9 @@ impl Client {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
-            AuthMethod::PublicKeyFile { key_file_name } => {
+            AuthMethod::PublicKeyFile { key_file_path } => {
                 let cpubk =
-                    russh_keys::load_public_key(key_file_name).map_err(crate::Error::KeyInvalid)?;
+                    russh_keys::load_public_key(key_file_path).map_err(crate::Error::KeyInvalid)?;
                 let mut agent = russh_keys::agent::client::AgentClient::connect_env()
                     .await
                     .unwrap();
