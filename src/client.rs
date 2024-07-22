@@ -36,11 +36,18 @@ pub enum AuthMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PromptResponse {
+    exact: bool,
+    prompt: String,
+    response: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub struct AuthKeyboardInteractive {
     /// Hnts to the server the preferred methods to be used for authentication.
     submethods: Option<String>,
-    responses: Vec<(String, String)>,
+    responses: Vec<PromptResponse>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -80,17 +87,14 @@ impl AuthMethod {
         }
     }
 
-    pub fn with_keyboard_interactive(auth: AuthKeyboardInteractive) -> Self {
+    pub const fn with_keyboard_interactive(auth: AuthKeyboardInteractive) -> Self {
         Self::KeyboardInteractive(auth)
     }
 }
 
 impl AuthKeyboardInteractive {
     pub fn new() -> Self {
-        Self {
-            submethods: None,
-            responses: vec![],
-        }
+        Default::default()
     }
 
     /// Hnts to the server the preferred methods to be used for authentication.
@@ -99,16 +103,48 @@ impl AuthKeyboardInteractive {
         self
     }
 
-    /// Add response to exact prompt.
+    /// Adds a response to the list of responses for a given prompt.
+    ///
+    /// The comparison for the prompt is done using a "contains".
     pub fn with_response(mut self, prompt: impl Into<String>, response: impl Into<String>) -> Self {
-        self.responses.push((prompt.into(), response.into()));
+        self.responses.push(PromptResponse {
+            exact: false,
+            prompt: prompt.into(),
+            response: response.into(),
+        });
+
         self
+    }
+
+    /// Adds a response to the list of responses for a given exact prompt.
+    pub fn with_response_exact(
+        mut self,
+        prompt: impl Into<String>,
+        response: impl Into<String>,
+    ) -> Self {
+        self.responses.push(PromptResponse {
+            exact: true,
+            prompt: prompt.into(),
+            response: response.into(),
+        });
+
+        self
+    }
+}
+
+impl PromptResponse {
+    fn matches(&self, received_prompt: &str) -> bool {
+        if self.exact {
+            self.prompt.eq(received_prompt)
+        } else {
+            received_prompt.contains(&self.prompt)
+        }
     }
 }
 
 impl From<AuthKeyboardInteractive> for AuthMethod {
     fn from(value: AuthKeyboardInteractive) -> Self {
-        AuthMethod::with_keyboard_interactive(value)
+        Self::with_keyboard_interactive(value)
     }
 }
 
@@ -306,14 +342,17 @@ impl Client {
 
                     let mut responses = vec![];
                     for prompt in prompts {
-                        let Some(pos) = kbd.responses.iter().position(|(p, _)| p == &prompt.prompt)
+                        let Some(pos) = kbd
+                            .responses
+                            .iter()
+                            .position(|pr| pr.matches(&prompt.prompt))
                         else {
                             return Err(crate::Error::KeyboardInteractiveNoResponseForPrompt(
                                 prompt.prompt,
                             ));
                         };
-                        let (_, response) = kbd.responses.remove(pos);
-                        responses.push(response);
+                        let pr = kbd.responses.remove(pos);
+                        responses.push(pr.response);
                     }
 
                     res = handle
@@ -809,7 +848,21 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
             AuthKeyboardInteractive::new()
-                .with_response("Password: ", env("ASYNC_SSH2_TEST_HOST_PW"))
+                .with_response("Password", env("ASYNC_SSH2_TEST_HOST_PW"))
+                .into(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_keyboard_interactive_exact() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthKeyboardInteractive::new()
+                .with_response_exact("Password: ", env("ASYNC_SSH2_TEST_HOST_PW"))
                 .into(),
             ServerCheckMethod::NoCheck,
         )
@@ -823,7 +876,7 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
             AuthKeyboardInteractive::new()
-                .with_response("Password: ", "wrong password")
+                .with_response_exact("Password: ", "wrong password")
                 .into(),
             ServerCheckMethod::NoCheck,
         )
@@ -842,7 +895,9 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthKeyboardInteractive::new().into(),
+            AuthKeyboardInteractive::new()
+                .with_response_exact("Password:", "123")
+                .into(),
             ServerCheckMethod::NoCheck,
         )
         .await;
