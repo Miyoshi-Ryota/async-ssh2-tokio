@@ -378,10 +378,12 @@ impl Client {
     /// Some sshd_config does not enable sftp by default, so make sure it is enabled.
     /// A config line like a `Subsystem sftp internal-sftp` or
     /// `Subsystem sftp /usr/lib/openssh/sftp-server` is needed in the sshd_config in remote machine.
-    pub async fn upload_file(
+    pub async fn upload_file<T: AsRef<Path>, U: Into<String>>(
         &self,
-        src_file_path: &str,
-        dest_file_path: &str,
+        src_file_path: T,
+        //fa993: This cannot be AsRef<Path> because of underlying lib constraints as described here
+        //https://github.com/AspectUnk/russh-sftp/issues/7#issuecomment-1738355245
+        dest_file_path: U,
     ) -> Result<(), crate::Error> {
         // start sftp session
         let channel = self.get_channel().await?;
