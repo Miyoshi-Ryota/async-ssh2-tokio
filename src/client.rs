@@ -502,6 +502,8 @@ impl Handler for ClientHandler {
 mod tests {
     use core::time;
 
+    use tokio::io::AsyncReadExt;
+
     use crate::client::*;
 
     fn env(name: &str) -> String {
@@ -602,6 +604,31 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
 
         let output = client.execute("echo Hello World").await.unwrap().stdout;
         assert_eq!("Hello World\n", output);
+    }
+
+    #[tokio::test]
+    async fn direct_tcpip_channel() {
+        let client = establish_test_host_connection().await;
+        let channel = client
+            .open_direct_tcpip_channel(
+                format!(
+                    "{}:{}",
+                    env("ASYNC_SSH2_TEST_HTTP_SERVER_IP"),
+                    env("ASYNC_SSH2_TEST_HTTP_SERVER_PORT"),
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut stream = channel.into_stream();
+        stream.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+
+        let body = response.split_once("\r\n\r\n").unwrap().1;
+        assert_eq!("Hello", body);
     }
 
     #[tokio::test]
