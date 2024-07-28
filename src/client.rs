@@ -371,6 +371,48 @@ impl Client {
             .map_err(crate::Error::SshError)
     }
 
+    /// Open a TCP/IP forwarding channel.
+    ///
+    /// This opens a `direct-tcpip` channel to the given target.
+    pub async fn open_direct_tcpip_channel<
+        T: ToSocketAddrsWithHostname,
+        S: Into<Option<SocketAddr>>,
+    >(
+        &self,
+        target: T,
+        src: S,
+    ) -> Result<Channel<Msg>, crate::Error> {
+        let targets = target
+            .to_socket_addrs()
+            .map_err(crate::Error::AddressInvalid)?;
+        let src = src
+            .into()
+            .map(|src| (src.ip().to_string(), src.port().into()))
+            .unwrap_or_else(|| ("127.0.0.1".to_string(), 22));
+
+        let mut connect_err = crate::Error::AddressInvalid(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "could not resolve to any addresses",
+        ));
+        for target in targets {
+            match self
+                .connection_handle
+                .channel_open_direct_tcpip(
+                    target.ip().to_string(),
+                    target.port().into(),
+                    src.0.clone(),
+                    src.1,
+                )
+                .await
+            {
+                Ok(channel) => return Ok(channel),
+                Err(err) => connect_err = crate::Error::SshError(err),
+            }
+        }
+
+        return Err(connect_err);
+    }
+
     /// Upload a file with sftp to the remote server.
     ///
     /// `src_file_path` is the path to the file on the local machine.
@@ -572,6 +614,8 @@ impl Handler for ClientHandler {
 mod tests {
     use core::time;
 
+    use tokio::io::AsyncReadExt;
+
     use crate::client::*;
 
     fn env(name: &str) -> String {
@@ -672,6 +716,31 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
 
         let output = client.execute("echo Hello World").await.unwrap().stdout;
         assert_eq!("Hello World\n", output);
+    }
+
+    #[tokio::test]
+    async fn direct_tcpip_channel() {
+        let client = establish_test_host_connection().await;
+        let channel = client
+            .open_direct_tcpip_channel(
+                format!(
+                    "{}:{}",
+                    env("ASYNC_SSH2_TEST_HTTP_SERVER_IP"),
+                    env("ASYNC_SSH2_TEST_HTTP_SERVER_PORT"),
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut stream = channel.into_stream();
+        stream.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+
+        let body = response.split_once("\r\n\r\n").unwrap().1;
+        assert_eq!("Hello", body);
     }
 
     #[tokio::test]

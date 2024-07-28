@@ -9,6 +9,17 @@ services:
     networks:
       ssh-network:
         ipv4_address: 10.10.10.2
+  # The HTTP server is used for the `direct-tcpip` channel test.
+  http-server:
+    image: python:alpine
+    command: >
+      sh -c "
+        echo -n Hello > index.html &&
+        python -m http.server
+      "
+    networks:
+      ssh-network:
+        ipv4_address: 10.10.10.4
   async-ssh2-tokio:
     build: # Change build context to be copy async-ssh2-tokio which is located parent directory.
       context: ../
@@ -19,6 +30,7 @@ services:
         ipv4_address: 10.10.10.3
     depends_on:
       - ssh-server
+      - http-server
 networks:
   ssh-network:
     driver: bridge
