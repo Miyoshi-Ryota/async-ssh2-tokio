@@ -10,7 +10,6 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# hadolint ignore=DL3006
 RUN echo 'root:root' |chpasswd
 
 RUN sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/g' /etc/ssh/sshd_config
