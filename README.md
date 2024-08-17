@@ -54,5 +54,5 @@ async fn main() -> Result<(), async_ssh2_tokio::Error> {
 ```
 
 ## Running Tests
-1. install docker and docker-compose
+1. install docker and docker compose
 2. run shell script `./tests/run_unit_tests.sh`
