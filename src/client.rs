@@ -1,13 +1,14 @@
 use async_trait::async_trait;
+use russh::client::KeyboardInteractiveAuthResponse;
 use russh::{
     client::{Config, Handle, Handler, Msg},
     Channel,
 };
 use russh_sftp::{client::SftpSession, protocol::OpenFlags};
-use std::fmt::Debug;
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::{fmt::Debug, path::Path};
+use std::{io, path::PathBuf};
 use tokio::io::AsyncWriteExt;
 
 use crate::ToSocketAddrsWithHostname;
@@ -25,12 +26,28 @@ pub enum AuthMethod {
         key_pass: Option<String>,
     },
     PrivateKeyFile {
-        key_file_name: String,
+        key_file_path: PathBuf,
         key_pass: Option<String>,
     },
     PublicKeyFile {
-        key_file_name: String,
+        key_file_path: PathBuf,
     },
+    KeyboardInteractive(AuthKeyboardInteractive),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PromptResponse {
+    exact: bool,
+    prompt: String,
+    response: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub struct AuthKeyboardInteractive {
+    /// Hnts to the server the preferred methods to be used for authentication.
+    submethods: Option<String>,
+    responses: Vec<PromptResponse>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -57,17 +74,77 @@ impl AuthMethod {
         }
     }
 
-    pub fn with_key_file(key_file_name: &str, passphrase: Option<&str>) -> Self {
+    pub fn with_key_file<T: AsRef<Path>>(key_file_path: T, passphrase: Option<&str>) -> Self {
         Self::PrivateKeyFile {
-            key_file_name: key_file_name.to_string(),
+            key_file_path: key_file_path.as_ref().to_path_buf(),
             key_pass: passphrase.map(str::to_string),
         }
     }
 
-    pub fn with_public_key_file(key_file_name: &str) -> Self {
+    pub fn with_public_key_file<T: AsRef<Path>>(key_file_path: T) -> Self {
         Self::PublicKeyFile {
-            key_file_name: key_file_name.to_string(),
+            key_file_path: key_file_path.as_ref().to_path_buf(),
         }
+    }
+
+    pub const fn with_keyboard_interactive(auth: AuthKeyboardInteractive) -> Self {
+        Self::KeyboardInteractive(auth)
+    }
+}
+
+impl AuthKeyboardInteractive {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Hnts to the server the preferred methods to be used for authentication.
+    pub fn with_submethods(mut self, submethods: impl Into<String>) -> Self {
+        self.submethods = Some(submethods.into());
+        self
+    }
+
+    /// Adds a response to the list of responses for a given prompt.
+    ///
+    /// The comparison for the prompt is done using a "contains".
+    pub fn with_response(mut self, prompt: impl Into<String>, response: impl Into<String>) -> Self {
+        self.responses.push(PromptResponse {
+            exact: false,
+            prompt: prompt.into(),
+            response: response.into(),
+        });
+
+        self
+    }
+
+    /// Adds a response to the list of responses for a given exact prompt.
+    pub fn with_response_exact(
+        mut self,
+        prompt: impl Into<String>,
+        response: impl Into<String>,
+    ) -> Self {
+        self.responses.push(PromptResponse {
+            exact: true,
+            prompt: prompt.into(),
+            response: response.into(),
+        });
+
+        self
+    }
+}
+
+impl PromptResponse {
+    fn matches(&self, received_prompt: &str) -> bool {
+        if self.exact {
+            self.prompt.eq(received_prompt)
+        } else {
+            received_prompt.contains(&self.prompt)
+        }
+    }
+}
+
+impl From<AuthKeyboardInteractive> for AuthMethod {
+    fn from(value: AuthKeyboardInteractive) -> Self {
+        Self::with_keyboard_interactive(value)
     }
 }
 
@@ -211,10 +288,10 @@ impl Client {
                 }
             }
             AuthMethod::PrivateKeyFile {
-                key_file_name,
+                key_file_path,
                 key_pass,
             } => {
-                let cprivk = russh_keys::load_secret_key(key_file_name, key_pass.as_deref())
+                let cprivk = russh_keys::load_secret_key(key_file_path, key_pass.as_deref())
                     .map_err(crate::Error::KeyInvalid)?;
                 let is_authentificated = handle
                     .authenticate_publickey(username, Arc::new(cprivk))
@@ -223,9 +300,9 @@ impl Client {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
-            AuthMethod::PublicKeyFile { key_file_name } => {
+            AuthMethod::PublicKeyFile { key_file_path } => {
                 let cpubk =
-                    russh_keys::load_public_key(key_file_name).map_err(crate::Error::KeyInvalid)?;
+                    russh_keys::load_public_key(key_file_path).map_err(crate::Error::KeyInvalid)?;
                 let mut agent = russh_keys::agent::client::AgentClient::connect_env()
                     .await
                     .unwrap();
@@ -250,6 +327,39 @@ impl Client {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
+            AuthMethod::KeyboardInteractive(mut kbd) => {
+                let mut res = handle
+                    .authenticate_keyboard_interactive_start(username, kbd.submethods)
+                    .await?;
+                loop {
+                    let prompts = match res {
+                        KeyboardInteractiveAuthResponse::Success => break,
+                        KeyboardInteractiveAuthResponse::Failure => {
+                            return Err(crate::Error::KeyboardInteractiveAuthFailed);
+                        }
+                        KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
+                    };
+
+                    let mut responses = vec![];
+                    for prompt in prompts {
+                        let Some(pos) = kbd
+                            .responses
+                            .iter()
+                            .position(|pr| pr.matches(&prompt.prompt))
+                        else {
+                            return Err(crate::Error::KeyboardInteractiveNoResponseForPrompt(
+                                prompt.prompt,
+                            ));
+                        };
+                        let pr = kbd.responses.remove(pos);
+                        responses.push(pr.response);
+                    }
+
+                    res = handle
+                        .authenticate_keyboard_interactive_respond(responses)
+                        .await?;
+                }
+            }
         };
         Ok(())
     }
@@ -261,6 +371,48 @@ impl Client {
             .map_err(crate::Error::SshError)
     }
 
+    /// Open a TCP/IP forwarding channel.
+    ///
+    /// This opens a `direct-tcpip` channel to the given target.
+    pub async fn open_direct_tcpip_channel<
+        T: ToSocketAddrsWithHostname,
+        S: Into<Option<SocketAddr>>,
+    >(
+        &self,
+        target: T,
+        src: S,
+    ) -> Result<Channel<Msg>, crate::Error> {
+        let targets = target
+            .to_socket_addrs()
+            .map_err(crate::Error::AddressInvalid)?;
+        let src = src
+            .into()
+            .map(|src| (src.ip().to_string(), src.port().into()))
+            .unwrap_or_else(|| ("127.0.0.1".to_string(), 22));
+
+        let mut connect_err = crate::Error::AddressInvalid(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "could not resolve to any addresses",
+        ));
+        for target in targets {
+            match self
+                .connection_handle
+                .channel_open_direct_tcpip(
+                    target.ip().to_string(),
+                    target.port().into(),
+                    src.0.clone(),
+                    src.1,
+                )
+                .await
+            {
+                Ok(channel) => return Ok(channel),
+                Err(err) => connect_err = crate::Error::SshError(err),
+            }
+        }
+
+        return Err(connect_err);
+    }
+
     /// Upload a file with sftp to the remote server.
     ///
     /// `src_file_path` is the path to the file on the local machine.
@@ -268,10 +420,12 @@ impl Client {
     /// Some sshd_config does not enable sftp by default, so make sure it is enabled.
     /// A config line like a `Subsystem sftp internal-sftp` or
     /// `Subsystem sftp /usr/lib/openssh/sftp-server` is needed in the sshd_config in remote machine.
-    pub async fn upload_file(
+    pub async fn upload_file<T: AsRef<Path>, U: Into<String>>(
         &self,
-        src_file_path: &str,
-        dest_file_path: &str,
+        src_file_path: T,
+        //fa993: This cannot be AsRef<Path> because of underlying lib constraints as described here
+        //https://github.com/AspectUnk/russh-sftp/issues/7#issuecomment-1738355245
+        dest_file_path: U,
     ) -> Result<(), crate::Error> {
         // start sftp session
         let channel = self.get_channel().await?;
@@ -460,6 +614,8 @@ impl Handler for ClientHandler {
 mod tests {
     use core::time;
 
+    use tokio::io::AsyncReadExt;
+
     use crate::client::*;
 
     fn env(name: &str) -> String {
@@ -560,6 +716,31 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
 
         let output = client.execute("echo Hello World").await.unwrap().stdout;
         assert_eq!("Hello World\n", output);
+    }
+
+    #[tokio::test]
+    async fn direct_tcpip_channel() {
+        let client = establish_test_host_connection().await;
+        let channel = client
+            .open_direct_tcpip_channel(
+                format!(
+                    "{}:{}",
+                    env("ASYNC_SSH2_TEST_HTTP_SERVER_IP"),
+                    env("ASYNC_SSH2_TEST_HTTP_SERVER_PORT"),
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut stream = channel.into_stream();
+        stream.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+
+        let body = response.split_once("\r\n\r\n").unwrap().1;
+        assert_eq!("Hello", body);
     }
 
     #[tokio::test]
@@ -730,6 +911,76 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
         )
         .await;
         assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_keyboard_interactive() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthKeyboardInteractive::new()
+                .with_response("Password", env("ASYNC_SSH2_TEST_HOST_PW"))
+                .into(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_keyboard_interactive_exact() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthKeyboardInteractive::new()
+                .with_response_exact("Password: ", env("ASYNC_SSH2_TEST_HOST_PW"))
+                .into(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn auth_keyboard_interactive_wrong_response() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthKeyboardInteractive::new()
+                .with_response_exact("Password: ", "wrong password")
+                .into(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        match client {
+            Err(crate::error::Error::KeyboardInteractiveAuthFailed) => {}
+            Err(e) => {
+                panic!("Expected KeyboardInteractiveAuthFailed error. Got error: {e:?}")
+            }
+            Ok(_) => panic!("Expected KeyboardInteractiveAuthFailed error."),
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_keyboard_interactive_no_response() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthKeyboardInteractive::new()
+                .with_response_exact("Password:", "123")
+                .into(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        match client {
+            Err(crate::error::Error::KeyboardInteractiveNoResponseForPrompt(prompt)) => {
+                assert_eq!(prompt, "Password: ");
+            }
+            Err(e) => {
+                panic!("Expected KeyboardInteractiveNoResponseForPrompt error. Got error: {e:?}")
+            }
+            Ok(_) => panic!("Expected KeyboardInteractiveNoResponseForPrompt error."),
+        }
     }
 
     #[tokio::test]
