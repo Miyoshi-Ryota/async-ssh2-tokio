@@ -612,25 +612,46 @@ impl Handler for ClientHandler {
 
 #[cfg(test)]
 mod tests {
-    use core::time;
-
-    use tokio::io::AsyncReadExt;
-
     use crate::client::*;
+    use core::time;
+    use dotenv::dotenv;
+    use std::path::Path;
+    use std::sync::Once;
+    use tokio::io::AsyncReadExt;
+    static INIT: Once = Once::new();
+
+    fn initialize() {
+        // Perform your initialization tasks here
+        println!("Running initialization code before tests...");
+        // Example: load .env file if we are using non-docker environment
+        if is_running_in_docker() {
+            println!("Running inside Docker.");
+        } else {
+            println!("Not running inside Docker. Load env from file");
+            dotenv().ok();
+        }
+    }
+    fn is_running_in_docker() -> bool {
+        Path::new("/.dockerenv").exists() || check_cgroup()
+    }
+
+    fn check_cgroup() -> bool {
+        match std::fs::read_to_string("/proc/1/cgroup") {
+            Ok(contents) => contents.contains("docker"),
+            Err(_) => false,
+        }
+    }
 
     fn env(name: &str) -> String {
+        INIT.call_once(|| {
+            initialize();
+        });
         std::env::var(name).expect(
-            "Failed to get env var needed for test, make sure to set the following env vars:
-ASYNC_SSH2_TEST_HOST_USER
-ASYNC_SSH2_TEST_HOST_PW
-ASYNC_SSH2_TEST_HOST_IP
-ASYNC_SSH2_TEST_HOST_PORT
-ASYNC_SSH2_TEST_CLIENT_PROT_PRIV
-ASYNC_SSH2_TEST_CLIENT_PRIV
-ASYNC_SSH2_TEST_CLIENT_PROT_PASS
-ASYNC_SSH2_TEST_SERVER_PUB
-ASYNC_SSH2_TEST_UPLOAD_FILE
-",
+            format!(
+                "Failed to get env var needed for test, make sure to set the following env var: {}",
+                name
+            )
+            .as_str(),
         )
     }
 
@@ -1036,7 +1057,11 @@ ASYNC_SSH2_TEST_UPLOAD_FILE
             ServerCheckMethod::with_known_hosts_file(&env("ASYNC_SSH2_TEST_KNOWN_HOSTS")),
         )
         .await;
-        assert!(client.is_ok());
+        if is_running_in_docker() {
+            assert!(client.is_ok());
+        } else {
+            assert!(client.is_err());// DNS can't find the docker hostname if the rust running without docker container
+        }
     }
 
     #[tokio::test]

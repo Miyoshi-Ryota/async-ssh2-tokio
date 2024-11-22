@@ -16,11 +16,12 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 openssl = ["russh/openssl"]
 
 [dependencies]
-russh = "0.45.0"
-russh-keys = "0.45.0"
-russh-sftp = "2.0.1"
-thiserror = "1.0"
+russh = "0.46.0"
+russh-keys = "0.46.0"
+russh-sftp = "2.0.6"
+thiserror = "2.0"
 async-trait = "0.1"
 tokio = { version = "1", features = ["fs"] }
+dotenv = "0.15.0"
 
 [dev-dependencies]
