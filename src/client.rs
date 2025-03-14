@@ -149,15 +149,16 @@ impl From<AuthKeyboardInteractive> for AuthMethod {
 
 impl ServerCheckMethod {
     /// Convenience method to create a [`ServerCheckMethod`] from a string literal.
-
     pub fn with_public_key(key: &str) -> Self {
         Self::PublicKey(key.to_string())
     }
 
+    /// Convenience method to create a [`ServerCheckMethod`] from a string literal.
     pub fn with_public_key_file(key_file_name: &str) -> Self {
         Self::PublicKeyFile(key_file_name.to_string())
     }
 
+    /// Convenience method to create a [`ServerCheckMethod`] from a string literal.
     pub fn with_known_hosts_file(known_hosts_file: &str) -> Self {
         Self::KnownHostsFile(known_hosts_file.to_string())
     }
@@ -428,7 +429,7 @@ impl Client {
             }
         }
 
-        return Err(connect_err);
+        Err(connect_err)
     }
 
     /// Upload a file with sftp to the remote server.

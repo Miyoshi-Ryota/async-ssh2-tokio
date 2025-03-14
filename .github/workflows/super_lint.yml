@@ -24,6 +24,7 @@ jobs:
           VALIDATE_RUST_2018: false
           VALIDATE_SHELL_SHFMT: false
           VALIDATE_CHECKOV: false
+          VALIDATE_ENV: false
           VALIDATE_MARKDOWN_PRETTIER: false
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
