@@ -273,17 +273,23 @@ impl Client {
         match auth {
             AuthMethod::Password(password) => {
                 let is_authentificated = handle.authenticate_password(username, password).await?;
-                if !is_authentificated {
+                if !is_authentificated.success() {
                     return Err(crate::Error::PasswordWrong);
                 }
             }
             AuthMethod::PrivateKey { key_data, key_pass } => {
-                let cprivk = russh_keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
+                let cprivk = russh::keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
                     .map_err(crate::Error::KeyInvalid)?;
                 let is_authentificated = handle
-                    .authenticate_publickey(username, Arc::new(cprivk))
+                    .authenticate_publickey(
+                        username,
+                        russh::keys::PrivateKeyWithHashAlg::new(
+                            Arc::new(cprivk),
+                            handle.best_supported_rsa_hash().await?.flatten(),
+                        ),
+                    )
                     .await?;
-                if !is_authentificated {
+                if !is_authentificated.success() {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
@@ -291,22 +297,28 @@ impl Client {
                 key_file_path,
                 key_pass,
             } => {
-                let cprivk = russh_keys::load_secret_key(key_file_path, key_pass.as_deref())
+                let cprivk = russh::keys::load_secret_key(key_file_path, key_pass.as_deref())
                     .map_err(crate::Error::KeyInvalid)?;
                 let is_authentificated = handle
-                    .authenticate_publickey(username, Arc::new(cprivk))
+                    .authenticate_publickey(
+                        username,
+                        russh::keys::PrivateKeyWithHashAlg::new(
+                            Arc::new(cprivk),
+                            handle.best_supported_rsa_hash().await?.flatten(),
+                        ),
+                    )
                     .await?;
-                if !is_authentificated {
+                if !is_authentificated.success() {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
             AuthMethod::PublicKeyFile { key_file_path } => {
-                let cpubk =
-                    russh_keys::load_public_key(key_file_path).map_err(crate::Error::KeyInvalid)?;
-                let mut agent = russh_keys::agent::client::AgentClient::connect_env()
+                let cpubk = russh::keys::load_public_key(key_file_path)
+                    .map_err(crate::Error::KeyInvalid)?;
+                let mut agent = russh::keys::agent::client::AgentClient::connect_env()
                     .await
                     .unwrap();
-                let mut auth_identity: Option<russh_keys::key::PublicKey> = None;
+                let mut auth_identity: Option<russh::keys::PublicKey> = None;
                 for identity in agent
                     .request_identities()
                     .await
@@ -322,8 +334,15 @@ impl Client {
                     return Err(crate::Error::KeyAuthFailed);
                 }
 
-                let (_a, fut_res) = handle.authenticate_future(username, cpubk, agent).await;
-                if !fut_res.map_err(crate::Error::AgentAuthError)? {
+                let is_authentificated = handle
+                    .authenticate_publickey_with(
+                        username,
+                        cpubk,
+                        handle.best_supported_rsa_hash().await?.flatten(),
+                        &mut agent,
+                    )
+                    .await?;
+                if !is_authentificated.success() {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
@@ -334,7 +353,7 @@ impl Client {
                 loop {
                     let prompts = match res {
                         KeyboardInteractiveAuthResponse::Success => break,
-                        KeyboardInteractiveAuthResponse::Failure => {
+                        KeyboardInteractiveAuthResponse::Failure { .. } => {
                             return Err(crate::Error::KeyboardInteractiveAuthFailed);
                         }
                         KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
@@ -563,30 +582,29 @@ struct ClientHandler {
     server_check: ServerCheckMethod,
 }
 
-#[async_trait]
 impl Handler for ClientHandler {
     type Error = crate::Error;
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh_keys::key::PublicKey,
+        server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
         match &self.server_check {
             ServerCheckMethod::NoCheck => Ok(true),
             ServerCheckMethod::PublicKey(key) => {
-                let pk = russh_keys::parse_public_key_base64(key)
+                let pk = russh::keys::parse_public_key_base64(key)
                     .map_err(|_| crate::Error::ServerCheckFailed)?;
 
                 Ok(pk == *server_public_key)
             }
             ServerCheckMethod::PublicKeyFile(key_file_name) => {
-                let pk = russh_keys::load_public_key(key_file_name)
+                let pk = russh::keys::load_public_key(key_file_name)
                     .map_err(|_| crate::Error::ServerCheckFailed)?;
 
                 Ok(pk == *server_public_key)
             }
             ServerCheckMethod::KnownHostsFile(known_hosts_path) => {
-                let result = russh_keys::check_known_hosts_path(
+                let result = russh::keys::check_known_hosts_path(
                     &self.hostname,
                     self.host.port(),
                     server_public_key,
@@ -597,7 +615,7 @@ impl Handler for ClientHandler {
                 Ok(result)
             }
             ServerCheckMethod::DefaultKnownHostsFile => {
-                let result = russh_keys::check_known_hosts(
+                let result = russh::keys::check_known_hosts(
                     &self.hostname,
                     self.host.port(),
                     server_public_key,
