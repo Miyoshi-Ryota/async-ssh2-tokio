@@ -19,7 +19,6 @@ openssl = []
 russh = "0.51.1"
 russh-sftp = "2.0.8"
 thiserror = "2.0"
-async-trait = "0.1"
 tokio = { version = "1", features = ["fs"] }
 
 [dev-dependencies]

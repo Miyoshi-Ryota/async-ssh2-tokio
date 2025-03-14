@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use russh::client::KeyboardInteractiveAuthResponse;
 use russh::{
     client::{Config, Handle, Handler, Msg},
