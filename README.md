@@ -4,8 +4,8 @@
 [![Docs.rs](https://docs.rs/async-ssh2-tokio/badge.svg)](https://docs.rs/async-ssh2-tokio/latest/async_ssh2_tokio/)
 [![Crates.io](https://img.shields.io/crates/v/async-ssh2-tokio.svg)](https://crates.io/crates/async-ssh2-tokio)
 
-This library is an asynchronous and easy-to-use high level ssh client library
-for rust with the tokio runtime. Powered by the rust ssh implementation
+This library is an asynchronous and easy-to-use high level SSH client library
+for rust with the tokio runtime. Powered by the rust SSH implementation
 [russh](https://github.com/warp-tech/russh).
 
 
