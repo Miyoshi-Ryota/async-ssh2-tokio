@@ -1078,7 +1078,7 @@ mod tests {
         if is_running_in_docker() {
             assert!(client.is_ok());
         } else {
-            assert!(client.is_err());// DNS can't find the docker hostname if the rust running without docker container
+            assert!(client.is_err()); // DNS can't find the docker hostname if the rust running without docker container
         }
     }
 
