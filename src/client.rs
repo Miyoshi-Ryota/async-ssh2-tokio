@@ -28,6 +28,7 @@ pub enum AuthMethod {
         key_file_path: PathBuf,
         key_pass: Option<String>,
     },
+    #[cfg(not(target_os = "windows"))]
     PublicKeyFile {
         key_file_path: PathBuf,
     },
@@ -312,6 +313,7 @@ impl Client {
                     return Err(crate::Error::KeyAuthFailed);
                 }
             }
+            #[cfg(not(target_os = "windows"))]
             AuthMethod::PublicKeyFile { key_file_path } => {
                 let cpubk = russh::keys::load_public_key(key_file_path)
                     .map_err(crate::Error::KeyInvalid)?;
