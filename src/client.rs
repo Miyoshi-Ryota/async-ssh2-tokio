@@ -81,6 +81,7 @@ impl AuthMethod {
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
     pub fn with_public_key_file<T: AsRef<Path>>(key_file_path: T) -> Self {
         Self::PublicKeyFile {
             key_file_path: key_file_path.as_ref().to_path_buf(),
