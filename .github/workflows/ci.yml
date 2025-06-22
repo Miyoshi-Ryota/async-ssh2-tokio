@@ -14,10 +14,9 @@ jobs:
       - name: Run unit tests
         shell: bash
         run: ./tests/run_unit_tests.sh
-
   clippy_check:
-   runs-on: ubuntu-latest
-   steps:
-     - uses: actions/checkout@v4
-     - name: Run Clippy
-       run: cargo clippy --all-targets --all-features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features
