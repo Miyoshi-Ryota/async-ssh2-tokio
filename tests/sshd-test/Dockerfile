@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/Warsaw
 
 RUN apt-get update && \
-    apt-get install -y openssh-server='1:9.6p1-3ubuntu13.8' openssh-sftp-server='1:9.6p1-3ubuntu13.8' && \
+    apt-get install -y openssh-server openssh-sftp-server && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
