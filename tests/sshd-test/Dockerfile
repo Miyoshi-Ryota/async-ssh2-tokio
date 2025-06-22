@@ -5,8 +5,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/Warsaw
 
+# hadolint ignore=DL3008
 RUN apt-get update && \
-    apt-get install -y openssh-server openssh-sftp-server && \
+    apt-get install -y --no-install-recommends openssh-server openssh-sftp-server && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
