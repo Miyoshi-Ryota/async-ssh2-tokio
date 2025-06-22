@@ -20,6 +20,7 @@ russh = "0.51.1"
 russh-sftp = "2.0.8"
 thiserror = "2.0"
 tokio = { version = "1", features = ["fs"] }
+base64ct = "=1.6.0"
 
 [dev-dependencies]
 dotenv = "0.15.0"
