@@ -667,13 +667,8 @@ mod tests {
         INIT.call_once(|| {
             initialize();
         });
-        std::env::var(name).expect(
-            format!(
-                "Failed to get env var needed for test, make sure to set the following env var: {}",
-                name
-            )
-            .as_str(),
-        )
+        std::env::var(name).unwrap_or_else(|_| panic!("Failed to get env var needed for test, make sure to set the following env var: {}",
+                name))
     }
 
     fn test_address() -> SocketAddr {
@@ -901,7 +896,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_key_file(&env("ASYNC_SSH2_TEST_CLIENT_PRIV"), None),
+            AuthMethod::with_key_file(env("ASYNC_SSH2_TEST_CLIENT_PRIV"), None),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -914,7 +909,7 @@ mod tests {
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
             AuthMethod::with_key_file(
-                &env("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV"),
+                env("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV"),
                 Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS")),
             ),
             ServerCheckMethod::NoCheck,
@@ -1100,7 +1095,7 @@ mod tests {
     #[tokio::test]
     async fn client_can_upload_file() {
         let client = establish_test_host_connection().await;
-        let _ = client
+        client
             .upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded")
             .await
             .unwrap();
