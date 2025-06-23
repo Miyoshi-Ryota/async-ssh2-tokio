@@ -1,7 +1,7 @@
 use russh::client::KeyboardInteractiveAuthResponse;
 use russh::{
-    client::{Config, Handle, Handler, Msg},
     Channel,
+    client::{Config, Handle, Handler, Msg},
 };
 use russh_sftp::{client::SftpSession, protocol::OpenFlags};
 use std::net::SocketAddr;
@@ -667,8 +667,12 @@ mod tests {
         INIT.call_once(|| {
             initialize();
         });
-        std::env::var(name).unwrap_or_else(|_| panic!("Failed to get env var needed for test, make sure to set the following env var: {}",
-                name))
+        std::env::var(name).unwrap_or_else(|_| {
+            panic!(
+                "Failed to get env var needed for test, make sure to set the following env var: {}",
+                name
+            )
+        })
     }
 
     fn test_address() -> SocketAddr {
