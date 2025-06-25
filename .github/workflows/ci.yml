@@ -1,6 +1,8 @@
 name: Unit tests
 
 on: [push, pull_request]
+env:
+  RUSTFLAGS: "-Dwarnings"
 
 jobs:
   build-and-unit-test:
@@ -12,3 +14,12 @@ jobs:
       - name: Run unit tests
         shell: bash
         run: ./tests/run_unit_tests.sh
+  rust-checks:
+    runs-on: ubuntu-latest
+    name: Cargo Clippy and Format
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust Formatting
+        run: cargo fmt --check
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features
