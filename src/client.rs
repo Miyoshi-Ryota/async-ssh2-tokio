@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{fmt::Debug, path::Path};
 use std::{io, path::PathBuf};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::ToSocketAddrsWithHostname;
 
@@ -471,6 +471,46 @@ impl Client {
             .map_err(crate::Error::IoError)?;
         file.flush().await.map_err(crate::Error::IoError)?;
         file.shutdown().await.map_err(crate::Error::IoError)?;
+
+        Ok(())
+    }
+
+    /// Download a file from the remote server using sftp.
+    ///
+    /// `remote_file_path` is the path to the file on the remote machine.
+    /// `local_file_path` is the path to the file on the local machine.
+    /// Some sshd_config does not enable sftp by default, so make sure it is enabled.
+    /// A config line like a `Subsystem sftp internal-sftp` or
+    /// `Subsystem sftp /usr/lib/openssh/sftp-server` is needed in the sshd_config in remote machine.
+    pub async fn download_file<T: AsRef<Path>, U: Into<String>>(
+        &self,
+        remote_file_path: U,
+        local_file_path: T,
+    ) -> Result<(), crate::Error> {
+        // start sftp session
+        let channel = self.get_channel().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        let sftp = SftpSession::new(channel.into_stream()).await?;
+
+        // open remote file for reading
+        let mut remote_file = sftp
+            .open_with_flags(remote_file_path, OpenFlags::READ)
+            .await?;
+
+        // read remote file contents
+        let mut contents = Vec::new();
+        remote_file.read_to_end(contents.as_mut()).await?;
+
+        // write contents to local file
+        let mut local_file = tokio::fs::File::create(local_file_path.as_ref())
+            .await
+            .map_err(crate::Error::IoError)?;
+
+        local_file
+            .write_all(&contents)
+            .await
+            .map_err(crate::Error::IoError)?;
+        local_file.flush().await.map_err(crate::Error::IoError)?;
 
         Ok(())
     }
@@ -1105,5 +1145,24 @@ mod tests {
             .unwrap();
         let result = client.execute("cat /tmp/uploaded").await.unwrap();
         assert_eq!(result.stdout, "this is a test file\n");
+    }
+
+    #[tokio::test]
+    async fn client_can_download_file() {
+        let client = establish_test_host_connection().await;
+        
+        client
+            .execute("echo 'this is a downloaded test file' > /tmp/test_download")
+            .await
+            .unwrap();
+        
+        let local_path = std::env::temp_dir().join("downloaded_test_file");
+        client
+            .download_file("/tmp/test_download", &local_path)
+            .await
+            .unwrap();
+        
+        let contents = tokio::fs::read_to_string(&local_path).await.unwrap();
+        assert_eq!(contents, "this is a downloaded test file\n");
     }
 }
