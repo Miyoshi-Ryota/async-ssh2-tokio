@@ -709,8 +709,7 @@ mod tests {
         });
         std::env::var(name).unwrap_or_else(|_| {
             panic!(
-                "Failed to get env var needed for test, make sure to set the following env var: {}",
-                name
+                "Failed to get env var needed for test, make sure to set the following env var: {name}",
             )
         })
     }
@@ -1150,18 +1149,18 @@ mod tests {
     #[tokio::test]
     async fn client_can_download_file() {
         let client = establish_test_host_connection().await;
-        
+
         client
             .execute("echo 'this is a downloaded test file' > /tmp/test_download")
             .await
             .unwrap();
-        
+
         let local_path = std::env::temp_dir().join("downloaded_test_file");
         client
             .download_file("/tmp/test_download", &local_path)
             .await
             .unwrap();
-        
+
         let contents = tokio::fs::read_to_string(&local_path).await.unwrap();
         assert_eq!(contents, "this is a downloaded test file\n");
     }
