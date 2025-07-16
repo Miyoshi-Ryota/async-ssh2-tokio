@@ -709,8 +709,7 @@ mod tests {
         });
         std::env::var(name).unwrap_or_else(|_| {
             panic!(
-                "Failed to get env var needed for test, make sure to set the following env var: {}",
-                name
+                "Failed to get env var needed for test, make sure to set the following env var: {name}",
             )
         })
     }
