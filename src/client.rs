@@ -12,9 +12,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::ToSocketAddrsWithHostname;
 
-/// An authentification token, currently only by password.
+/// An authentification token.
 ///
 /// Used when creating a [`Client`] for authentification.
+/// Supports password, private key, public key, SSH agent, and keyboard interactive authentication.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AuthMethod {
@@ -32,6 +33,8 @@ pub enum AuthMethod {
     PublicKeyFile {
         key_file_path: PathBuf,
     },
+    #[cfg(not(target_os = "windows"))]
+    Agent,
     KeyboardInteractive(AuthKeyboardInteractive),
 }
 
@@ -86,6 +89,26 @@ impl AuthMethod {
         Self::PublicKeyFile {
             key_file_path: key_file_path.as_ref().to_path_buf(),
         }
+    }
+
+    /// Creates a new SSH agent authentication method.
+    ///
+    /// This will attempt to authenticate using all identities available in the SSH agent.
+    /// The SSH agent must be running and the SSH_AUTH_SOCK environment variable must be set.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use async_ssh2_tokio::client::AuthMethod;
+    ///
+    /// let auth = AuthMethod::with_agent();
+    /// ```
+    ///
+    /// # Platform Support
+    /// This method is only available on Unix-like systems (Linux, macOS, etc.).
+    /// It is not available on Windows.
+    #[cfg(not(target_os = "windows"))]
+    pub fn with_agent() -> Self {
+        Self::Agent
     }
 
     pub const fn with_keyboard_interactive(auth: AuthKeyboardInteractive) -> Self {
@@ -347,6 +370,44 @@ impl Client {
                     .await?;
                 if !is_authentificated.success() {
                     return Err(crate::Error::KeyAuthFailed);
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            AuthMethod::Agent => {
+                let mut agent = russh::keys::agent::client::AgentClient::connect_env()
+                    .await
+                    .map_err(|_| crate::Error::AgentConnectionFailed)?;
+
+                let identities = agent
+                    .request_identities()
+                    .await
+                    .map_err(|_| crate::Error::AgentRequestIdentitiesFailed)?;
+
+                if identities.is_empty() {
+                    return Err(crate::Error::AgentNoIdentities);
+                }
+
+                let mut auth_success = false;
+                for identity in identities {
+                    let result = handle
+                        .authenticate_publickey_with(
+                            username,
+                            identity.clone(),
+                            handle.best_supported_rsa_hash().await?.flatten(),
+                            &mut agent,
+                        )
+                        .await;
+
+                    if let Ok(auth_result) = result {
+                        if auth_result.success() {
+                            auth_success = true;
+                            break;
+                        }
+                    }
+                }
+
+                if !auth_success {
+                    return Err(crate::Error::AgentAuthenticationFailed);
                 }
             }
             AuthMethod::KeyboardInteractive(mut kbd) => {
@@ -944,6 +1005,73 @@ mod tests {
         )
         .await;
         assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
+    async fn auth_with_agent() {
+        // This test requires SSH agent to be running with the test key loaded
+        // In Docker environment, the agent is always properly configured
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_agent(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await
+        .expect("Agent authentication should succeed with correct key loaded");
+
+        // Verify we can execute a command
+        let output = client.execute("echo test").await.unwrap();
+        assert_eq!("test\n", output.stdout);
+    }
+
+    #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
+    async fn auth_with_agent_wrong_user() {
+        // This test verifies that agent auth fails with wrong username
+        let result = Client::connect(
+            test_address(),
+            "wrong_user_that_does_not_exist",
+            AuthMethod::with_agent(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+
+        // Should fail with authentication error
+        assert!(matches!(
+            result,
+            Err(crate::Error::AgentAuthenticationFailed)
+        ));
+    }
+
+    #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
+    async fn auth_with_agent_no_sock() {
+        // Test behavior when SSH_AUTH_SOCK is not set
+        // Temporarily unset SSH_AUTH_SOCK for this test
+        let original_sock = std::env::var("SSH_AUTH_SOCK").ok();
+        unsafe {
+            std::env::remove_var("SSH_AUTH_SOCK");
+        }
+
+        let result = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER"),
+            AuthMethod::with_agent(),
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+
+        // Restore original SSH_AUTH_SOCK if it was set
+        if let Some(sock) = original_sock {
+            unsafe {
+                std::env::set_var("SSH_AUTH_SOCK", sock);
+            }
+        }
+
+        // Should fail with connection error
+        assert!(matches!(result, Err(crate::Error::AgentConnectionFailed)));
     }
 
     #[tokio::test]
