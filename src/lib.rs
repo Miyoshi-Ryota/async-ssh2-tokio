@@ -20,6 +20,8 @@
 //!     // AuthMethod::with_key_file("key_file_name", None);
 //!     // or
 //!     // AuthMethod::with_key(key: &str, passphrase: Option<&str>)
+//!     // or use SSH agent (Unix/Linux only):
+//!     // AuthMethod::with_agent()
 //!     let auth_method = AuthMethod::with_password("root");
 //!     let mut client = Client::connect(
 //!         ("10.10.10.2", 22),

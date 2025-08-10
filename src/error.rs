@@ -29,6 +29,14 @@ pub enum Error {
     SendError(#[from] russh::SendError),
     #[error("Agent auth error")]
     AgentAuthError(#[from] russh::AgentAuthError),
+    #[error("Failed to connect to SSH agent")]
+    AgentConnectionFailed,
+    #[error("Failed to request identities from SSH agent")]
+    AgentRequestIdentitiesFailed,
+    #[error("SSH agent has no identities")]
+    AgentNoIdentities,
+    #[error("SSH agent authentication failed")]
+    AgentAuthenticationFailed,
     #[error("SFTP error occured: {0}")]
     SftpError(#[from] russh_sftp::client::error::Error),
     #[error("I/O error")]
