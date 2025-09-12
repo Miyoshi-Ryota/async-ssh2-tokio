@@ -36,6 +36,12 @@ pub enum AuthMethod {
     #[cfg(not(target_os = "windows"))]
     Agent,
     KeyboardInteractive(AuthKeyboardInteractive),
+    PrivateKeyAndPassword {
+        password: String,
+        /// entire contents of private key file
+        key_data: String,
+        key_pass: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -441,6 +447,23 @@ impl Client {
                     res = handle
                         .authenticate_keyboard_interactive_respond(responses)
                         .await?;
+                }
+            }
+            AuthMethod::PrivateKeyAndPassword { password, key_data, key_pass } => {
+                let cprivk = russh::keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
+                    .map_err(crate::Error::KeyInvalid)?;
+                handle
+                    .authenticate_publickey(
+                        username,
+                        russh::keys::PrivateKeyWithHashAlg::new(
+                            Arc::new(cprivk),
+                            handle.best_supported_rsa_hash().await?.flatten(),
+                        ),
+                    )
+                    .await?;
+                let is_authentificated = handle.authenticate_password(username, password).await?;
+                if !is_authentificated.success() {
+                    return Err(crate::Error::KeyAuthFailed);
                 }
             }
         };
