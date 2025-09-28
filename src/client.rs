@@ -405,11 +405,11 @@ impl Client {
                         )
                         .await;
 
-                    if let Ok(auth_result) = result {
-                        if auth_result.success() {
-                            auth_success = true;
-                            break;
-                        }
+                    if let Ok(auth_result) = result
+                        && auth_result.success()
+                    {
+                        auth_success = true;
+                        break;
                     }
                 }
 
