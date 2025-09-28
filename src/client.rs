@@ -38,6 +38,13 @@ pub enum AuthMethod {
     KeyboardInteractive(AuthKeyboardInteractive),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SteamingOutput {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+    ExitStatus(u32),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PromptResponse {
     exact: bool,
@@ -637,6 +644,64 @@ impl Client {
         }
     }
 
+    /// Execute a remote command via the ssh connection.
+    ///
+    /// Command output is stream to the provided channel. Returns the exit code.
+    /// The channel sends `SteamingOutput` enum variants to distinguish stdout,
+    /// stderr and exit code so message arrive interleaved and in the order
+    /// they are received. See `execute` for more details.
+    ///
+    pub async fn execute_streaming(
+        &self,
+        command: &str,
+        ch: tokio::sync::mpsc::Sender<SteamingOutput>,
+    ) -> Result<u32, crate::Error> {
+        let mut channel = self.connection_handle.channel_open_session().await?;
+        channel.exec(true, command).await?;
+
+        let mut result: Option<u32> = None;
+
+        // While the channel has messages...
+        while let Some(msg) = channel.wait().await {
+            //dbg!(&msg);
+            match msg {
+                // If we get data, add it to the buffer
+                russh::ChannelMsg::Data { ref data } => {
+                    ch.send(SteamingOutput::Stdout(Vec::from(data.as_ref())))
+                        .await
+                        .unwrap();
+                }
+                russh::ChannelMsg::ExtendedData { ref data, ext } => {
+                    if ext == 1 {
+                        ch.send(SteamingOutput::Stderr(Vec::from(data.as_ref())))
+                            .await
+                            .unwrap();
+                    }
+                }
+
+                // If we get an exit code report, store it, but crucially don't
+                // assume this message means end of communications. The data might
+                // not be finished yet!
+                russh::ChannelMsg::ExitStatus { exit_status } => result = Some(exit_status),
+
+                // We SHOULD get this EOF messagge, but 4254 sec 5.3 also permits
+                // the channel to close without it being sent. And sometimes this
+                // message can even precede the Data message, so don't handle it
+                // russh::ChannelMsg::Eof => break,
+                _ => {}
+            }
+        }
+
+        if let Some(exit_code) = result {
+            ch.send(SteamingOutput::ExitStatus(exit_code))
+                .await
+                .unwrap();
+            Ok(exit_code)
+        } else {
+            Err(crate::Error::CommandDidntExit)
+        }
+    }
+
     /// A debugging function to get the username this client is connected as.
     pub fn get_connection_username(&self) -> &String {
         &self.username
@@ -826,12 +891,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_streaming_command_result() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let client = establish_test_host_connection().await;
+        let result = client.execute_streaming("echo test!!!", tx).await.unwrap();
+        let mut output = Vec::new();
+        while let Some(msg) = rx.recv().await {
+            output.push(msg);
+        }
+        assert_eq!(0, result);
+        assert_eq!(
+            &[
+                SteamingOutput::Stdout(b"test!!!\n".to_vec()),
+                SteamingOutput::ExitStatus(0),
+            ],
+            output.as_slice(),
+        );
+    }
+
+    #[tokio::test]
     async fn execute_command_result_stderr() {
         let client = establish_test_host_connection().await;
         let output = client.execute("echo test!!! 1>&2").await.unwrap();
         assert_eq!("", output.stdout);
         assert_eq!("test!!!\n", output.stderr);
         assert_eq!(0, output.exit_status);
+    }
+
+    #[tokio::test]
+    async fn execute_streaming_command_result_stderr() {
+        let client = establish_test_host_connection().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let result = client
+            .execute_streaming("echo test!!! 1>&2", tx)
+            .await
+            .unwrap();
+        let mut output = Vec::new();
+        while let Some(msg) = rx.recv().await {
+            output.push(msg);
+        }
+        assert_eq!(0, result);
+        assert_eq!(
+            &[
+                SteamingOutput::Stderr(b"test!!!\n".to_vec()),
+                SteamingOutput::ExitStatus(0),
+            ],
+            output.as_slice()
+        );
     }
 
     #[tokio::test]
@@ -847,6 +953,19 @@ mod tests {
         let client = establish_test_host_connection().await;
         let output = client.execute("exit 42").await.unwrap();
         assert_eq!(42, output.exit_status);
+    }
+
+    #[tokio::test]
+    async fn execute_streaming_command_status() {
+        let client = establish_test_host_connection().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let result = client.execute_streaming("exit 42", tx).await.unwrap();
+        let mut output = Vec::new();
+        while let Some(msg) = rx.recv().await {
+            output.push(msg);
+        }
+        assert_eq!(42, result);
+        assert_eq!(&[SteamingOutput::ExitStatus(42),], output.as_slice());
     }
 
     #[tokio::test]
