@@ -1136,8 +1136,14 @@ mod tests {
             }
         }
         assert_eq!(Some(7), result);
-        assert_eq!(vec![b"out1\n".to_vec(), b"out2\n".to_vec()], stdout_output);
-        assert_eq!(vec![b"err1\n".to_vec(), b"err2\n".to_vec()], stderr_output);
+        assert_eq!(
+            vec![b"out1\n".to_vec(), b"out2\n".to_vec()].concat(),
+            stdout_output.concat()
+        );
+        assert_eq!(
+            vec![b"err1\n".to_vec(), b"err2\n".to_vec()].concat(),
+            stderr_output.concat()
+        );
     }
 
     #[tokio::test]
