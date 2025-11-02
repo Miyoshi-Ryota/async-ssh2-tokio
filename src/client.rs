@@ -652,6 +652,12 @@ impl Client {
     /// stderr and exit code so message arrive interleaved and in the order
     /// they are received. See `execute` for more details.
     ///
+    #[deprecated(
+        since = "0.11.0",
+        note = "Use execute_io with channels directly for more flexibility.\n\
+              This method will be removed or introduced breaking changes in future versions.\n\
+              At minimum, SteamingOutput will be renamed to StreamingOutput"
+    )]
     pub async fn execute_streaming(
         &self,
         command: &str,
