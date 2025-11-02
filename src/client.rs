@@ -652,55 +652,42 @@ impl Client {
     /// stderr and exit code so message arrive interleaved and in the order
     /// they are received. See `execute` for more details.
     ///
+    #[deprecated(
+        since = "0.11.0",
+        note = "Use execute_io with channels directly for more flexibility.\n\
+              This method will be removed or introduced breaking changes in future versions.\n\
+              At minimum, SteamingOutput will be renamed to StreamingOutput"
+    )]
     pub async fn execute_streaming(
         &self,
         command: &str,
         ch: tokio::sync::mpsc::Sender<SteamingOutput>,
     ) -> Result<u32, crate::Error> {
-        let mut channel = self.connection_handle.channel_open_session().await?;
-        channel.exec(true, command).await?;
+        let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::channel(1);
+        let (stderr_tx, mut stderr_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
 
-        let mut result: Option<u32> = None;
-
-        // While the channel has messages...
-        while let Some(msg) = channel.wait().await {
-            //dbg!(&msg);
-            match msg {
-                // If we get data, add it to the buffer
-                russh::ChannelMsg::Data { ref data } => {
-                    ch.send(SteamingOutput::Stdout(Vec::from(data.as_ref())))
-                        .await
-                        .unwrap();
-                }
-                russh::ChannelMsg::ExtendedData { ref data, ext } => {
-                    if ext == 1 {
-                        ch.send(SteamingOutput::Stderr(Vec::from(data.as_ref())))
-                            .await
-                            .unwrap();
-                    }
-                }
-
-                // If we get an exit code report, store it, but crucially don't
-                // assume this message means end of communications. The data might
-                // not be finished yet!
-                russh::ChannelMsg::ExitStatus { exit_status } => result = Some(exit_status),
-
-                // We SHOULD get this EOF messagge, but 4254 sec 5.3 also permits
-                // the channel to close without it being sent. And sometimes this
-                // message can even precede the Data message, so don't handle it
-                // russh::ChannelMsg::Eof => break,
-                _ => {}
-            }
+        let exec_future = self.execute_io(command, stdout_tx, Some(stderr_tx), None, false, None);
+        tokio::pin!(exec_future);
+        let result = loop {
+            tokio::select! {
+                result = &mut exec_future => break result,
+                Some(stdout) = stdout_rx.recv() => {
+                    ch.send(SteamingOutput::Stdout(stdout)).await.unwrap();
+                },
+                Some(stderr) = stderr_rx.recv() => {
+                    ch.send(SteamingOutput::Stderr(stderr)).await.unwrap();
+                },
+            };
+        }?;
+        // see if any output is left in the channels
+        if let Some(stdout) = stdout_rx.recv().await {
+            ch.send(SteamingOutput::Stdout(stdout)).await.unwrap();
         }
-
-        if let Some(exit_code) = result {
-            ch.send(SteamingOutput::ExitStatus(exit_code))
-                .await
-                .unwrap();
-            Ok(exit_code)
-        } else {
-            Err(crate::Error::CommandDidntExit)
+        if let Some(stderr) = stderr_rx.recv().await {
+            ch.send(SteamingOutput::Stderr(stderr)).await.unwrap();
         }
+        ch.send(SteamingOutput::ExitStatus(result)).await.unwrap();
+        Ok(result)
     }
 
     /// Execute a remote command via the ssh connection and perform i/o via channels.
@@ -720,42 +707,51 @@ impl Client {
     /// Example:
     ///
     /// ```no_run
+    /// use async_ssh2_tokio::{Client, AuthMethod, ServerCheckMethod};
+    /// use tokio::sync::mpsc;
     ///
-    /// let cmd = "date" ;
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), async_ssh2_tokio::Error> {
+    ///     let mut client = Client::connect(
+    ///         ("10.10.10.2", 22),
+    ///         "root",
+    ///         AuthMethod::with_password("root"),
+    ///         ServerCheckMethod::NoCheck,
+    ///     ).await?;
+    ///     let mut result_stdout = vec![];
+    ///     let mut result_stderr = vec![];
     ///
-    /// let mut result_stdout = vec![];
-    /// let mut result_stderr = vec![];
+    ///     let (stdout_tx, mut stdout_rx) = mpsc::channel(10);
+    ///     let (stderr_tx, mut stderr_rx) = mpsc::channel(10);
+    ///     let cmd = "date";
+    ///     let exec_future = client.execute_io(&cmd, stdout_tx, Some(stderr_tx), None, false, None);
+    ///     tokio::pin!(exec_future);
+    ///     let result = loop {
+    ///         tokio::select! {
+    ///             result = &mut exec_future => break result,
+    ///             Some(stdout) = stdout_rx.recv() => {
+    ///                 println!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
+    ///                 result_stdout.push(stdout);
+    ///             },
+    ///             Some(stderr) = stderr_rx.recv() => {
+    ///                 println!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
+    ///                 result_stderr.push(stderr);
+    ///             },
+    ///         };
+    ///     }?;
     ///
-    /// let (stdout_tx, mut stdout_rx) = mpsc::channel(10);
-    /// let (stderr_tx, mut stderr_rx) = mpsc::channel(10);
-    ///
-    /// let exec_future = client.execute_io(&cmd, stdout_tx, Some(stderr_tx), None, false);
-    /// tokio::pin!(exec_future);
-    /// let result = loop {
-    ///     tokio::select! {
-    ///         result = &mut exec_future => break result,
-    ///         Some(stdout) = stdout_rx.recv() => {
-    ///             debug!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
-    ///             result_stdout.push(stdout);
-    ///         },
-    ///         Some(stderr) = stderr_rx.recv() => {
-    ///             debug!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
-    ///             result_stderr.push(stderr);
-    ///         },
-    ///     };
-    /// }?;
-    ///
-    /// // see if any output is left in the channels
-    /// if let Some(stdout) = stdout_rx.recv().await {
-    ///     debug!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
-    ///     result_stdout.push(stdout);
-    /// }
-    /// if let Some(stderr) = stderr_rx.recv().await {
-    ///     debug!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
-    ///     result_stderr.push(stderr);
+    ///     // see if any output is left in the channels
+    ///     if let Some(stdout) = stdout_rx.recv().await {
+    ///         println!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
+    ///         result_stdout.push(stdout);
+    ///     }
+    ///     if let Some(stderr) = stderr_rx.recv().await {
+    ///         println!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
+    ///         result_stderr.push(stderr);
+    ///     }
+    ///     Ok(())
     /// }
     /// ```
-    ///
     pub async fn execute_io(
         &self,
         command: &str,
@@ -949,6 +945,8 @@ impl Handler for ClientHandler {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated, clippy::useless_vec)]
+
     use crate::client::*;
     use core::time;
     use dotenv::dotenv;
@@ -1116,6 +1114,44 @@ mod tests {
         }
         assert_eq!(42, result);
         assert_eq!(&[SteamingOutput::ExitStatus(42),], output.as_slice());
+    }
+
+    #[tokio::test]
+    async fn execute_io_command() {
+        let client = establish_test_host_connection().await;
+        let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::channel(10);
+        let (stderr_tx, mut stderr_rx) = tokio::sync::mpsc::channel(10);
+        let cmd = "echo out1; echo err1 1>&2; echo out2; echo err2 1>&2; exit 7";
+        let exec_future = client.execute_io(cmd, stdout_tx, Some(stderr_tx), None, false, None);
+        tokio::pin!(exec_future);
+        let mut result: Option<u32> = None;
+        let mut stdout_output = vec![];
+        let mut stderr_output = vec![];
+        loop {
+            tokio::select! {
+                result_inner = &mut exec_future => {
+                    result = Some(result_inner.unwrap());
+                },
+                Some(stdout) = stdout_rx.recv() => {
+                    stdout_output.push(stdout);
+                },
+                Some(stderr) = stderr_rx.recv() => {
+                    stderr_output.push(stderr);
+                },
+            };
+            if result.is_some() {
+                break;
+            }
+        }
+        assert_eq!(Some(7), result);
+        assert_eq!(
+            vec![b"out1\n".to_vec(), b"out2\n".to_vec()].concat(),
+            stdout_output.concat()
+        );
+        assert_eq!(
+            vec![b"err1\n".to_vec(), b"err2\n".to_vec()].concat(),
+            stderr_output.concat()
+        );
     }
 
     #[tokio::test]
