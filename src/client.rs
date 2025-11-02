@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::{fmt::Debug, path::Path};
 use std::{io, path::PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 use crate::ToSocketAddrsWithHostname;
 
@@ -697,6 +698,155 @@ impl Client {
                 .await
                 .unwrap();
             Ok(exit_code)
+        } else {
+            Err(crate::Error::CommandDidntExit)
+        }
+    }
+
+    /// Execute a remote command via the ssh connection and perform i/o via channels.
+    ///
+    /// `execute_io` does the same as `execute`, but ties stdin and stdout/stderr to channels.
+    /// Giving a stdin channel is optional. If there is only a stdout channel, stderr will be
+    /// sent to the stdout channel. Sending an empty string to the stdin channel will send an
+    /// EOF to the remote side.
+    /// If `request_pty` is true, a pseudo terminal is requested for the session. This is
+    /// sometime necessary for example to enter a password, which is not request via stdin
+    /// but directly from the terminal. NOTE: A pty has no stderr, so stderr output is
+    /// sent to the stdout channel.
+    /// The exit code of the command is returned as a result. If the remote ssh server
+    /// does not report an exit code, a default exit code can be passed, otherwise an error
+    /// is returned.
+    ///
+    /// Example:
+    ///
+    /// ```no_run
+    ///
+    /// let cmd = "date" ;
+    ///
+    /// let mut result_stdout = vec![];
+    /// let mut result_stderr = vec![];
+    ///
+    /// let (stdout_tx, mut stdout_rx) = mpsc::channel(10);
+    /// let (stderr_tx, mut stderr_rx) = mpsc::channel(10);
+    ///
+    /// let exec_future = client.execute_io(&cmd, stdout_tx, Some(stderr_tx), None, false);
+    /// tokio::pin!(exec_future);
+    /// let result = loop {
+    ///     tokio::select! {
+    ///         result = &mut exec_future => break result,
+    ///         Some(stdout) = stdout_rx.recv() => {
+    ///             debug!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
+    ///             result_stdout.push(stdout);
+    ///         },
+    ///         Some(stderr) = stderr_rx.recv() => {
+    ///             debug!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
+    ///             result_stderr.push(stderr);
+    ///         },
+    ///     };
+    /// }?;
+    ///
+    /// // see if any output is left in the channels
+    /// if let Some(stdout) = stdout_rx.recv().await {
+    ///     debug!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
+    ///     result_stdout.push(stdout);
+    /// }
+    /// if let Some(stderr) = stderr_rx.recv().await {
+    ///     debug!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
+    ///     result_stderr.push(stderr);
+    /// }
+    /// ```
+    ///
+    pub async fn execute_io(
+        &self,
+        command: &str,
+        stdout_channel: mpsc::Sender<Vec<u8>>,
+        stderr_channel: Option<mpsc::Sender<Vec<u8>>>,
+        mut stdin_channel: Option<mpsc::Receiver<Vec<u8>>>,
+        request_pty: bool,
+        default_exit_code: Option<u32>,
+    ) -> Result<u32, crate::Error> {
+        let mut channel = self.connection_handle.channel_open_session().await?;
+
+        let mut result: Option<u32> = None;
+        if request_pty {
+            channel
+                .request_pty(false, "xterm", 80_u32, 24_u32, 0, 0, &[])
+                .await?;
+        }
+
+        channel.exec(true, command).await?;
+
+        // While the channel has messages...
+        loop {
+            let recv_stdin = async {
+                if let Some(ch) = stdin_channel.as_mut() {
+                    Some(ch.recv().await)
+                } else {
+                    None
+                }
+            };
+            tokio::select! {
+                Some(input) = recv_stdin => {
+                    if let Some(input) = input {
+                        if input.is_empty() {
+                            channel.eof().await? ;
+                        } else {
+                            channel.data(&input as &[u8]).await?;
+                        }
+                    }
+                },
+                msg = channel.wait() => {
+                    //dbg!(&msg);
+                    match msg {
+                        // If we get data, add it to the buffer
+                        Some(russh::ChannelMsg::Data { ref data }) => {
+                            //dbg!("sending stdout");
+                            stdout_channel
+                                .send(data.to_vec())
+                                .await
+                                .map_err(crate::Error::ChannelSendError)?;
+                        }
+                        Some (russh::ChannelMsg::ExtendedData { ref data, ext }) => {
+                            if ext == 1 {
+                                if let Some(stderr_channel) = &stderr_channel {
+                                    //dbg!("sending stderr");
+                                    stderr_channel
+                                        .send(data.to_vec())
+                                        .await
+                                        .map_err(crate::Error::ChannelSendError)?;
+                                } else {
+                                    //dbg!("sending stderr to stdout");
+                                    stdout_channel
+                                        .send(data.to_vec())
+                                        .await
+                                        .map_err(crate::Error::ChannelSendError)?;
+                                }
+                            }
+                        }
+
+                        // If we get an exit code report, store it, but crucially don't
+                        // assume this message means end of communications. The data might
+                        // not be finished yet!
+                        Some (russh::ChannelMsg::ExitStatus { exit_status }) => result = Some(exit_status),
+
+                        // We SHOULD get this EOF messagge, but 4254 sec 5.3 also permits
+                        // the channel to close without it being sent. And sometimes this
+                        // message can even precede the Data message, so don't handle it
+                        // russh::ChannelMsg::Eof => break,
+                        Some (_) => {},
+                        None => break,
+                    }
+                }
+            }
+        }
+
+        // If we received an exit code, report it back
+        if let Some(result) = result {
+            Ok(result)
+        // If we have an default exit code, report it back
+        } else if let Some(default_exit_code) = default_exit_code {
+            Ok(default_exit_code)
+        // Otherwise, report an error
         } else {
             Err(crate::Error::CommandDidntExit)
         }

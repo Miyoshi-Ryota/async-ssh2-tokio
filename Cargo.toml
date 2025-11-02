@@ -16,9 +16,9 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 openssl = []
 
 [dependencies]
-russh = "0.52.1"
+russh = "0.54.6"
 russh-sftp = "2.1.1"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 tokio = { version = "1.45.1", features = ["fs"] }
 
 [dev-dependencies]
