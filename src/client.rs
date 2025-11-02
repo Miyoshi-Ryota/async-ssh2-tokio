@@ -700,7 +700,7 @@ impl Client {
     ///
     /// Example:
     ///
-    /// ```
+    /// ```no_run
     /// use async_ssh2_tokio::{Client, AuthMethod, ServerCheckMethod};
     /// use tokio::sync::mpsc;
     ///
