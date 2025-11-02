@@ -719,43 +719,52 @@ impl Client {
     ///
     /// Example:
     ///
-    /// ```no_run
+    /// ```
+    /// use async_ssh2_tokio::{Client, AuthMethod, ServerCheckMethod};
+    /// use tokio::sync::mpsc;
     ///
-    /// let cmd = "date" ;
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), async_ssh2_tokio::Error> {
+    ///     let mut client = Client::connect(
+    ///         ("10.10.10.2", 22),
+    ///         "root",
+    ///         AuthMethod::with_password("root"),
+    ///         ServerCheckMethod::NoCheck,
+    ///     ).await?;
+    ///     let mut result_stdout = vec![];
+    ///     let mut result_stderr = vec![];
     ///
-    /// let mut result_stdout = vec![];
-    /// let mut result_stderr = vec![];
+    ///     let (stdout_tx, mut stdout_rx) = mpsc::channel(10);
+    ///     let (stderr_tx, mut stderr_rx) = mpsc::channel(10);
+    ///     let cmd = "date";
+    ///     let exec_future = client.execute_io(&cmd, stdout_tx, Some(stderr_tx), None, false, None);
+    ///     tokio::pin!(exec_future);
+    ///     let result = loop {
+    ///         tokio::select! {
+    ///             result = &mut exec_future => break result,
+    ///             Some(stdout) = stdout_rx.recv() => {
+    ///                 println!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
+    ///                 result_stdout.push(stdout);
+    ///             },
+    ///             Some(stderr) = stderr_rx.recv() => {
+    ///                 println!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
+    ///                 result_stderr.push(stderr);
+    ///             },
+    ///         };
+    ///     }?;
     ///
-    /// let (stdout_tx, mut stdout_rx) = mpsc::channel(10);
-    /// let (stderr_tx, mut stderr_rx) = mpsc::channel(10);
-    ///
-    /// let exec_future = client.execute_io(&cmd, stdout_tx, Some(stderr_tx), None, false);
-    /// tokio::pin!(exec_future);
-    /// let result = loop {
-    ///     tokio::select! {
-    ///         result = &mut exec_future => break result,
-    ///         Some(stdout) = stdout_rx.recv() => {
-    ///             debug!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
-    ///             result_stdout.push(stdout);
-    ///         },
-    ///         Some(stderr) = stderr_rx.recv() => {
-    ///             debug!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
-    ///             result_stderr.push(stderr);
-    ///         },
-    ///     };
-    /// }?;
-    ///
-    /// // see if any output is left in the channels
-    /// if let Some(stdout) = stdout_rx.recv().await {
-    ///     debug!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
-    ///     result_stdout.push(stdout);
-    /// }
-    /// if let Some(stderr) = stderr_rx.recv().await {
-    ///     debug!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
-    ///     result_stderr.push(stderr);
+    ///     // see if any output is left in the channels
+    ///     if let Some(stdout) = stdout_rx.recv().await {
+    ///         println!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
+    ///         result_stdout.push(stdout);
+    ///     }
+    ///     if let Some(stderr) = stderr_rx.recv().await {
+    ///         println!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
+    ///         result_stderr.push(stderr);
+    ///     }
+    ///     Ok(())
     /// }
     /// ```
-    ///
     pub async fn execute_io(
         &self,
         command: &str,
