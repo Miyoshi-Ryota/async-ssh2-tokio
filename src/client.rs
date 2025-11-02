@@ -945,6 +945,8 @@ impl Handler for ClientHandler {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated, clippy::useless_vec)]
+
     use crate::client::*;
     use core::time;
     use dotenv::dotenv;
