@@ -6,6 +6,7 @@ use russh::{
 use russh_sftp::{client::SftpSession, protocol::OpenFlags};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use std::{fmt::Debug, path::Path};
 use std::{io, path::PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -508,38 +509,93 @@ impl Client {
     ///
     /// `src_file_path` is the path to the file on the local machine.
     /// `dest_file_path` is the path to the file on the remote machine.
+    /// 'timeout_seconds' is the timeout, in seconds, for the operation, passed on to the sftp session.
+    /// If not specified it will default to the underlying value in the sftp code, which as of this writing is 10 seconds.
+    /// 'buffer_size_in_bytes' is the value this function will buffer the file through.  it defaults to 4KB.
+    /// 'show_progress' if true, logs will be emitted every 5% of the file upload, measured in bytes
     /// Some sshd_config does not enable sftp by default, so make sure it is enabled.
     /// A config line like a `Subsystem sftp internal-sftp` or
     /// `Subsystem sftp /usr/lib/openssh/sftp-server` is needed in the sshd_config in remote machine.
-    pub async fn upload_file<T: AsRef<Path>, U: Into<String>>(
+    pub async fn upload_file<T, U>(
         &self,
         src_file_path: T,
         //fa993: This cannot be AsRef<Path> because of underlying lib constraints as described here
         //https://github.com/AspectUnk/russh-sftp/issues/7#issuecomment-1738355245
         dest_file_path: U,
-    ) -> Result<(), crate::Error> {
+        timeout_seconds: Option<u64>,
+        buffer_size_in_bytes: Option<usize>,
+        show_progress: bool,
+    ) -> Result<(), crate::Error>
+    where
+        T: AsRef<Path> + std::fmt::Display,
+        U: Into<String>,
+    {
         // start sftp session
         let channel = self.get_channel().await?;
         channel.request_subsystem(true, "sftp").await?;
-        let sftp = SftpSession::new(channel.into_stream()).await?;
+        let sftp = SftpSession::new_opts(channel.into_stream(), timeout_seconds).await?;
 
+        let file_size = tokio::fs::metadata(&src_file_path).await?.len();
         // read file contents locally
-        let file_contents = tokio::fs::read(src_file_path)
+        let local_file = tokio::fs::File::open(&src_file_path)
             .await
             .map_err(crate::Error::IoError)?;
+        let mut local_file_buffered = tokio::io::BufReader::new(local_file);
 
-        // interaction with i/o
-        let mut file = sftp
+        let dest_file_path = dest_file_path.into();
+        let mut remote_file = sftp
             .open_with_flags(
-                dest_file_path,
+                dest_file_path.clone(),
                 OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE | OpenFlags::READ,
             )
             .await?;
-        file.write_all(&file_contents)
+
+        let buffer_size_in_bytes = buffer_size_in_bytes.unwrap_or(4096);
+        let mut buffer = vec![0; buffer_size_in_bytes];
+
+        let mut total_bytes_copied = 0;
+        let mut next_progress_marker = 5.0;
+
+        let start_time = Instant::now();
+        if show_progress {
+            log::info!(
+                "Starting file upload from {src_file_path} to {dest_file_path}, total bytes to be transferred: {}",
+                file_size
+            );
+        }
+        loop {
+            let n = local_file_buffered.read(&mut buffer).await?;
+            if n == 0 {
+                break;
+            }
+            remote_file
+                .write_all(&buffer[..n])
+                .await
+                .map_err(crate::Error::IoError)?;
+            if show_progress {
+                total_bytes_copied += n as u64;
+                let progress = (total_bytes_copied as f64 / file_size as f64) * 100.0;
+                if progress >= next_progress_marker {
+                    log::info!(
+                        "Progress of upload from {src_file_path} to {dest_file_path}: {:.0}% in elapsed time: {}s",
+                        next_progress_marker,
+                        start_time.elapsed().as_secs_f64()
+                    );
+                    next_progress_marker += 5.0;
+                }
+            }
+        }
+
+        if show_progress {
+            log::info!(
+                "file upload comprising {file_size} bytes from {src_file_path} to {dest_file_path} completed successfully in {}s",
+                start_time.elapsed().as_secs_f64()
+            );
+        }
+        remote_file
+            .shutdown()
             .await
             .map_err(crate::Error::IoError)?;
-        file.flush().await.map_err(crate::Error::IoError)?;
-        file.shutdown().await.map_err(crate::Error::IoError)?;
 
         Ok(())
     }
@@ -1572,7 +1628,7 @@ mod tests {
     async fn client_can_upload_file() {
         let client = establish_test_host_connection().await;
         client
-            .upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded")
+            .upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded", None, None, false)
             .await
             .unwrap();
         let result = client.execute("cat /tmp/uploaded").await.unwrap();
