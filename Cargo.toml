@@ -17,6 +17,7 @@ openssl = []
 
 [dependencies]
 russh = "0.54.6"
+log = "0.4"
 russh-sftp = "2.1.1"
 thiserror = "2.0.17"
 tokio = { version = "1.45.1", features = ["fs"] }
