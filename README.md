@@ -18,7 +18,7 @@ for rust with the tokio runtime. Powered by the rust SSH implementation
 ```toml
 [dependencies]
 tokio = "1"
-async-ssh2-tokio = "0.11.0"
+async-ssh2-tokio = "0.12.0"
 ```
 
 ## Usage
