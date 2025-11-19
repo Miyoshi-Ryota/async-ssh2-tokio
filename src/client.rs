@@ -1628,7 +1628,13 @@ mod tests {
     async fn client_can_upload_file() {
         let client = establish_test_host_connection().await;
         client
-            .upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded", None, None, false)
+            .upload_file(
+                &env("ASYNC_SSH2_TEST_UPLOAD_FILE"),
+                "/tmp/uploaded",
+                None,
+                None,
+                false,
+            )
             .await
             .unwrap();
         let result = client.execute("cat /tmp/uploaded").await.unwrap();
