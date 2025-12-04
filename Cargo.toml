@@ -16,7 +16,7 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 openssl = []
 
 [dependencies]
-russh = "0.54.6"
+russh = "0.55.0"
 log = "0.4"
 russh-sftp = "2.1.1"
 thiserror = "2.0.17"
