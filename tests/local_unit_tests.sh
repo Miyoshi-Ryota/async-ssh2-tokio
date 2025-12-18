@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This script makes it easy to run the cargo tests locally without dockers
 # a user "test" with password "test" is required
