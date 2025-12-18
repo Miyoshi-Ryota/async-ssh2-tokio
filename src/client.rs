@@ -6,9 +6,11 @@ use russh::{
 use russh_sftp::{client::SftpSession, protocol::OpenFlags};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use std::{fmt::Debug, path::Path};
 use std::{io, path::PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 use crate::ToSocketAddrsWithHostname;
 
@@ -42,6 +44,13 @@ pub enum AuthMethod {
         key_data: String,
         key_pass: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SteamingOutput {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+    ExitStatus(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -404,11 +413,11 @@ impl Client {
                         )
                         .await;
 
-                    if let Ok(auth_result) = result {
-                        if auth_result.success() {
-                            auth_success = true;
-                            break;
-                        }
+                    if let Ok(auth_result) = result
+                        && auth_result.success()
+                    {
+                        auth_success = true;
+                        break;
                     }
                 }
 
@@ -523,38 +532,93 @@ impl Client {
     ///
     /// `src_file_path` is the path to the file on the local machine.
     /// `dest_file_path` is the path to the file on the remote machine.
+    /// 'timeout_seconds' is the timeout, in seconds, for the operation, passed on to the sftp session.
+    /// If not specified it will default to the underlying value in the sftp code, which as of this writing is 10 seconds.
+    /// 'buffer_size_in_bytes' is the value this function will buffer the file through.  it defaults to 4KB.
+    /// 'show_progress' if true, logs will be emitted every 5% of the file upload, measured in bytes
     /// Some sshd_config does not enable sftp by default, so make sure it is enabled.
     /// A config line like a `Subsystem sftp internal-sftp` or
     /// `Subsystem sftp /usr/lib/openssh/sftp-server` is needed in the sshd_config in remote machine.
-    pub async fn upload_file<T: AsRef<Path>, U: Into<String>>(
+    pub async fn upload_file<T, U>(
         &self,
         src_file_path: T,
         //fa993: This cannot be AsRef<Path> because of underlying lib constraints as described here
         //https://github.com/AspectUnk/russh-sftp/issues/7#issuecomment-1738355245
         dest_file_path: U,
-    ) -> Result<(), crate::Error> {
+        timeout_seconds: Option<u64>,
+        buffer_size_in_bytes: Option<usize>,
+        show_progress: bool,
+    ) -> Result<(), crate::Error>
+    where
+        T: AsRef<Path> + std::fmt::Display,
+        U: Into<String>,
+    {
         // start sftp session
         let channel = self.get_channel().await?;
         channel.request_subsystem(true, "sftp").await?;
-        let sftp = SftpSession::new(channel.into_stream()).await?;
+        let sftp = SftpSession::new_opts(channel.into_stream(), timeout_seconds).await?;
 
+        let file_size = tokio::fs::metadata(&src_file_path).await?.len();
         // read file contents locally
-        let file_contents = tokio::fs::read(src_file_path)
+        let local_file = tokio::fs::File::open(&src_file_path)
             .await
             .map_err(crate::Error::IoError)?;
+        let mut local_file_buffered = tokio::io::BufReader::new(local_file);
 
-        // interaction with i/o
-        let mut file = sftp
+        let dest_file_path = dest_file_path.into();
+        let mut remote_file = sftp
             .open_with_flags(
-                dest_file_path,
+                dest_file_path.clone(),
                 OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE | OpenFlags::READ,
             )
             .await?;
-        file.write_all(&file_contents)
+
+        let buffer_size_in_bytes = buffer_size_in_bytes.unwrap_or(4096);
+        let mut buffer = vec![0; buffer_size_in_bytes];
+
+        let mut total_bytes_copied = 0;
+        let mut next_progress_marker = 5.0;
+
+        let start_time = Instant::now();
+        if show_progress {
+            log::info!(
+                "Starting file upload from {src_file_path} to {dest_file_path}, total bytes to be transferred: {}",
+                file_size
+            );
+        }
+        loop {
+            let n = local_file_buffered.read(&mut buffer).await?;
+            if n == 0 {
+                break;
+            }
+            remote_file
+                .write_all(&buffer[..n])
+                .await
+                .map_err(crate::Error::IoError)?;
+            if show_progress {
+                total_bytes_copied += n as u64;
+                let progress = (total_bytes_copied as f64 / file_size as f64) * 100.0;
+                if progress >= next_progress_marker {
+                    log::info!(
+                        "Progress of upload from {src_file_path} to {dest_file_path}: {:.0}% in elapsed time: {}s",
+                        next_progress_marker,
+                        start_time.elapsed().as_secs_f64()
+                    );
+                    next_progress_marker += 5.0;
+                }
+            }
+        }
+
+        if show_progress {
+            log::info!(
+                "file upload comprising {file_size} bytes from {src_file_path} to {dest_file_path} completed successfully in {}s",
+                start_time.elapsed().as_secs_f64()
+            );
+        }
+        remote_file
+            .shutdown()
             .await
             .map_err(crate::Error::IoError)?;
-        file.flush().await.map_err(crate::Error::IoError)?;
-        file.shutdown().await.map_err(crate::Error::IoError)?;
 
         Ok(())
     }
@@ -660,6 +724,209 @@ impl Client {
         }
     }
 
+    /// Execute a remote command via the ssh connection.
+    ///
+    /// Command output is stream to the provided channel. Returns the exit code.
+    /// The channel sends `SteamingOutput` enum variants to distinguish stdout,
+    /// stderr and exit code so message arrive interleaved and in the order
+    /// they are received. See `execute` for more details.
+    ///
+    #[deprecated(
+        since = "0.11.0",
+        note = "Use execute_io with channels directly for more flexibility.\n\
+              This method will be removed or introduced breaking changes in future versions.\n\
+              At minimum, SteamingOutput will be renamed to StreamingOutput"
+    )]
+    pub async fn execute_streaming(
+        &self,
+        command: &str,
+        ch: tokio::sync::mpsc::Sender<SteamingOutput>,
+    ) -> Result<u32, crate::Error> {
+        let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::channel(1);
+        let (stderr_tx, mut stderr_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+
+        let exec_future = self.execute_io(command, stdout_tx, Some(stderr_tx), None, false, None);
+        tokio::pin!(exec_future);
+        let result = loop {
+            tokio::select! {
+                result = &mut exec_future => break result,
+                Some(stdout) = stdout_rx.recv() => {
+                    ch.send(SteamingOutput::Stdout(stdout)).await.unwrap();
+                },
+                Some(stderr) = stderr_rx.recv() => {
+                    ch.send(SteamingOutput::Stderr(stderr)).await.unwrap();
+                },
+            };
+        }?;
+        // see if any output is left in the channels
+        if let Some(stdout) = stdout_rx.recv().await {
+            ch.send(SteamingOutput::Stdout(stdout)).await.unwrap();
+        }
+        if let Some(stderr) = stderr_rx.recv().await {
+            ch.send(SteamingOutput::Stderr(stderr)).await.unwrap();
+        }
+        ch.send(SteamingOutput::ExitStatus(result)).await.unwrap();
+        Ok(result)
+    }
+
+    /// Execute a remote command via the ssh connection and perform i/o via channels.
+    ///
+    /// `execute_io` does the same as `execute`, but ties stdin and stdout/stderr to channels.
+    /// Giving a stdin channel is optional. If there is only a stdout channel, stderr will be
+    /// sent to the stdout channel. Sending an empty string to the stdin channel will send an
+    /// EOF to the remote side.
+    /// If `request_pty` is true, a pseudo terminal is requested for the session. This is
+    /// sometime necessary for example to enter a password, which is not request via stdin
+    /// but directly from the terminal. NOTE: A pty has no stderr, so stderr output is
+    /// sent to the stdout channel.
+    /// The exit code of the command is returned as a result. If the remote ssh server
+    /// does not report an exit code, a default exit code can be passed, otherwise an error
+    /// is returned.
+    ///
+    /// Example:
+    ///
+    /// ```no_run
+    /// use async_ssh2_tokio::{Client, AuthMethod, ServerCheckMethod};
+    /// use tokio::sync::mpsc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), async_ssh2_tokio::Error> {
+    ///     let mut client = Client::connect(
+    ///         ("10.10.10.2", 22),
+    ///         "root",
+    ///         AuthMethod::with_password("root"),
+    ///         ServerCheckMethod::NoCheck,
+    ///     ).await?;
+    ///     let mut result_stdout = vec![];
+    ///     let mut result_stderr = vec![];
+    ///
+    ///     let (stdout_tx, mut stdout_rx) = mpsc::channel(10);
+    ///     let (stderr_tx, mut stderr_rx) = mpsc::channel(10);
+    ///     let cmd = "date";
+    ///     let exec_future = client.execute_io(&cmd, stdout_tx, Some(stderr_tx), None, false, None);
+    ///     tokio::pin!(exec_future);
+    ///     let result = loop {
+    ///         tokio::select! {
+    ///             result = &mut exec_future => break result,
+    ///             Some(stdout) = stdout_rx.recv() => {
+    ///                 println!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
+    ///                 result_stdout.push(stdout);
+    ///             },
+    ///             Some(stderr) = stderr_rx.recv() => {
+    ///                 println!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
+    ///                 result_stderr.push(stderr);
+    ///             },
+    ///         };
+    ///     }?;
+    ///
+    ///     // see if any output is left in the channels
+    ///     if let Some(stdout) = stdout_rx.recv().await {
+    ///         println!("ssh stdout: {}", String::from_utf8_lossy(&stdout));
+    ///         result_stdout.push(stdout);
+    ///     }
+    ///     if let Some(stderr) = stderr_rx.recv().await {
+    ///         println!("ssh stderr: {}", String::from_utf8_lossy(&stderr));
+    ///         result_stderr.push(stderr);
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn execute_io(
+        &self,
+        command: &str,
+        stdout_channel: mpsc::Sender<Vec<u8>>,
+        stderr_channel: Option<mpsc::Sender<Vec<u8>>>,
+        mut stdin_channel: Option<mpsc::Receiver<Vec<u8>>>,
+        request_pty: bool,
+        default_exit_code: Option<u32>,
+    ) -> Result<u32, crate::Error> {
+        let mut channel = self.connection_handle.channel_open_session().await?;
+
+        let mut result: Option<u32> = None;
+        if request_pty {
+            channel
+                .request_pty(false, "xterm", 80_u32, 24_u32, 0, 0, &[])
+                .await?;
+        }
+
+        channel.exec(true, command).await?;
+
+        // While the channel has messages...
+        loop {
+            let recv_stdin = async {
+                if let Some(ch) = stdin_channel.as_mut() {
+                    Some(ch.recv().await)
+                } else {
+                    None
+                }
+            };
+            tokio::select! {
+                Some(input) = recv_stdin => {
+                    if let Some(input) = input {
+                        if input.is_empty() {
+                            channel.eof().await? ;
+                        } else {
+                            channel.data(&input as &[u8]).await?;
+                        }
+                    }
+                },
+                msg = channel.wait() => {
+                    //dbg!(&msg);
+                    match msg {
+                        // If we get data, add it to the buffer
+                        Some(russh::ChannelMsg::Data { ref data }) => {
+                            //dbg!("sending stdout");
+                            stdout_channel
+                                .send(data.to_vec())
+                                .await
+                                .map_err(crate::Error::ChannelSendError)?;
+                        }
+                        Some (russh::ChannelMsg::ExtendedData { ref data, ext }) => {
+                            if ext == 1 {
+                                if let Some(stderr_channel) = &stderr_channel {
+                                    //dbg!("sending stderr");
+                                    stderr_channel
+                                        .send(data.to_vec())
+                                        .await
+                                        .map_err(crate::Error::ChannelSendError)?;
+                                } else {
+                                    //dbg!("sending stderr to stdout");
+                                    stdout_channel
+                                        .send(data.to_vec())
+                                        .await
+                                        .map_err(crate::Error::ChannelSendError)?;
+                                }
+                            }
+                        }
+
+                        // If we get an exit code report, store it, but crucially don't
+                        // assume this message means end of communications. The data might
+                        // not be finished yet!
+                        Some (russh::ChannelMsg::ExitStatus { exit_status }) => result = Some(exit_status),
+
+                        // We SHOULD get this EOF messagge, but 4254 sec 5.3 also permits
+                        // the channel to close without it being sent. And sometimes this
+                        // message can even precede the Data message, so don't handle it
+                        // russh::ChannelMsg::Eof => break,
+                        Some (_) => {},
+                        None => break,
+                    }
+                }
+            }
+        }
+
+        // If we received an exit code, report it back
+        if let Some(result) = result {
+            Ok(result)
+        // If we have an default exit code, report it back
+        } else if let Some(default_exit_code) = default_exit_code {
+            Ok(default_exit_code)
+        // Otherwise, report an error
+        } else {
+            Err(crate::Error::CommandDidntExit)
+        }
+    }
+
     /// A debugging function to get the username this client is connected as.
     pub fn get_connection_username(&self) -> &String {
         &self.username
@@ -757,6 +1024,8 @@ impl Handler for ClientHandler {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated, clippy::useless_vec)]
+
     use crate::client::*;
     use core::time;
     use dotenv::dotenv;
@@ -849,12 +1118,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_streaming_command_result() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let client = establish_test_host_connection().await;
+        let result = client.execute_streaming("echo test!!!", tx).await.unwrap();
+        let mut output = Vec::new();
+        while let Some(msg) = rx.recv().await {
+            output.push(msg);
+        }
+        assert_eq!(0, result);
+        assert_eq!(
+            &[
+                SteamingOutput::Stdout(b"test!!!\n".to_vec()),
+                SteamingOutput::ExitStatus(0),
+            ],
+            output.as_slice(),
+        );
+    }
+
+    #[tokio::test]
     async fn execute_command_result_stderr() {
         let client = establish_test_host_connection().await;
         let output = client.execute("echo test!!! 1>&2").await.unwrap();
         assert_eq!("", output.stdout);
         assert_eq!("test!!!\n", output.stderr);
         assert_eq!(0, output.exit_status);
+    }
+
+    #[tokio::test]
+    async fn execute_streaming_command_result_stderr() {
+        let client = establish_test_host_connection().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let result = client
+            .execute_streaming("echo test!!! 1>&2", tx)
+            .await
+            .unwrap();
+        let mut output = Vec::new();
+        while let Some(msg) = rx.recv().await {
+            output.push(msg);
+        }
+        assert_eq!(0, result);
+        assert_eq!(
+            &[
+                SteamingOutput::Stderr(b"test!!!\n".to_vec()),
+                SteamingOutput::ExitStatus(0),
+            ],
+            output.as_slice()
+        );
     }
 
     #[tokio::test]
@@ -870,6 +1180,57 @@ mod tests {
         let client = establish_test_host_connection().await;
         let output = client.execute("exit 42").await.unwrap();
         assert_eq!(42, output.exit_status);
+    }
+
+    #[tokio::test]
+    async fn execute_streaming_command_status() {
+        let client = establish_test_host_connection().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let result = client.execute_streaming("exit 42", tx).await.unwrap();
+        let mut output = Vec::new();
+        while let Some(msg) = rx.recv().await {
+            output.push(msg);
+        }
+        assert_eq!(42, result);
+        assert_eq!(&[SteamingOutput::ExitStatus(42),], output.as_slice());
+    }
+
+    #[tokio::test]
+    async fn execute_io_command() {
+        let client = establish_test_host_connection().await;
+        let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::channel(10);
+        let (stderr_tx, mut stderr_rx) = tokio::sync::mpsc::channel(10);
+        let cmd = "echo out1; echo err1 1>&2; echo out2; echo err2 1>&2; exit 7";
+        let exec_future = client.execute_io(cmd, stdout_tx, Some(stderr_tx), None, false, None);
+        tokio::pin!(exec_future);
+        let mut result: Option<u32> = None;
+        let mut stdout_output = vec![];
+        let mut stderr_output = vec![];
+        loop {
+            tokio::select! {
+                result_inner = &mut exec_future => {
+                    result = Some(result_inner.unwrap());
+                },
+                Some(stdout) = stdout_rx.recv() => {
+                    stdout_output.push(stdout);
+                },
+                Some(stderr) = stderr_rx.recv() => {
+                    stderr_output.push(stderr);
+                },
+            };
+            if result.is_some() {
+                break;
+            }
+        }
+        assert_eq!(Some(7), result);
+        assert_eq!(
+            vec![b"out1\n".to_vec(), b"out2\n".to_vec()].concat(),
+            stdout_output.concat()
+        );
+        assert_eq!(
+            vec![b"err1\n".to_vec(), b"err2\n".to_vec()].concat(),
+            stderr_output.concat()
+        );
     }
 
     #[tokio::test]
@@ -1290,7 +1651,13 @@ mod tests {
     async fn client_can_upload_file() {
         let client = establish_test_host_connection().await;
         client
-            .upload_file(&env("ASYNC_SSH2_TEST_UPLOAD_FILE"), "/tmp/uploaded")
+            .upload_file(
+                &env("ASYNC_SSH2_TEST_UPLOAD_FILE"),
+                "/tmp/uploaded",
+                None,
+                None,
+                false,
+            )
             .await
             .unwrap();
         let result = client.execute("cat /tmp/uploaded").await.unwrap();

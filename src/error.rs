@@ -1,5 +1,7 @@
 use std::io;
 
+use tokio::sync::mpsc;
+
 /// This is the `thiserror` error for all crate errors.
 ///
 /// Most ssh related error is wrapped in the `SshError` variant,
@@ -41,4 +43,6 @@ pub enum Error {
     SftpError(#[from] russh_sftp::client::error::Error),
     #[error("I/O error")]
     IoError(#[from] io::Error),
+    #[error("Channel send error")]
+    ChannelSendError(#[from] mpsc::error::SendError<Vec<u8>>),
 }
