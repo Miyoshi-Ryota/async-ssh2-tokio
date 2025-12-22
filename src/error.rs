@@ -1,5 +1,6 @@
 use std::io;
 
+use russh::MethodSet;
 use tokio::sync::mpsc;
 
 /// This is the `thiserror` error for all crate errors.
@@ -9,16 +10,6 @@ use tokio::sync::mpsc;
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("Keyboard-interactive authentication failed")]
-    KeyboardInteractiveAuthFailed,
-    #[error("No keyboard-interactive response for prompt: {0}")]
-    KeyboardInteractiveNoResponseForPrompt(String),
-    #[error("Key authentication failed")]
-    KeyAuthFailed,
-    #[error("Unable to load key, bad format or passphrase: {0}")]
-    KeyInvalid(russh::keys::Error),
-    #[error("Password authentication failed")]
-    PasswordWrong,
     #[error("Invalid address was provided: {0}")]
     AddressInvalid(io::Error),
     #[error("The executed command didn't send an exit code")]
@@ -29,6 +20,39 @@ pub enum Error {
     SshError(#[from] russh::Error),
     #[error("Send error")]
     SendError(#[from] russh::SendError),
+    #[error("SFTP error occured: {0}")]
+    SftpError(#[from] russh_sftp::client::error::Error),
+    #[error("I/O error")]
+    IoError(#[from] io::Error),
+    #[error("Channel send error")]
+    ChannelSendError(#[from] mpsc::error::SendError<Vec<u8>>),
+    #[error("Authentication methods exhausted")]
+    Authentication(Vec<AuthenticationError>),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum AuthenticationError {
+    #[error("Keyboard-interactive authentication failed")]
+    KeyboardInteractiveAuthFailed {
+        remaining_methods: MethodSet,
+        partial_success: bool,
+    },
+    #[error("No keyboard-interactive response for prompt: {0}")]
+    KeyboardInteractiveNoResponseForPrompt(String),
+    #[error("Key authentication failed")]
+    KeyAuthFailed {
+        remaining_methods: MethodSet,
+        partial_success: bool,
+    },
+    #[error("Key does not match known identity")]
+    KeyWithoutIdentity,
+    #[error("Unable to load key, bad format or passphrase: {0}")]
+    KeyInvalid(russh::keys::Error),
+    #[error("Password authentication failed")]
+    PasswordWrong {
+        remaining_methods: MethodSet,
+        partial_success: bool,
+    },
     #[error("Agent auth error")]
     AgentAuthError(#[from] russh::AgentAuthError),
     #[error("Failed to connect to SSH agent")]
@@ -38,11 +62,10 @@ pub enum Error {
     #[error("SSH agent has no identities")]
     AgentNoIdentities,
     #[error("SSH agent authentication failed")]
-    AgentAuthenticationFailed,
-    #[error("SFTP error occured: {0}")]
-    SftpError(#[from] russh_sftp::client::error::Error),
-    #[error("I/O error")]
-    IoError(#[from] io::Error),
-    #[error("Channel send error")]
-    ChannelSendError(#[from] mpsc::error::SendError<Vec<u8>>),
+    AgentAuthenticationFailed {
+        remaining_methods: MethodSet,
+        partial_success: bool,
+    },
+    #[error("Ssh error occured: {0}")]
+    SshError(#[from] russh::Error),
 }

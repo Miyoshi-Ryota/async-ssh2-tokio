@@ -12,15 +12,25 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN echo 'root:root' |chpasswd
+RUN useradd -m -s /bin/bash multi-auth
+RUN echo 'multi-auth:multi-auth' |chpasswd
 
 RUN sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/g' /etc/ssh/sshd_config
 RUN sed -ri 's/^#?PasswordAuthentication.*$/PasswordAuthentication yes/g' /etc/ssh/sshd_config
 RUN sed -ri 's/^#?KbdInteractiveAuthentication.*$/KbdInteractiveAuthentication yes/g' /etc/ssh/sshd_config
+RUN <<EOR
+cat << EOF >> /etc/ssh/sshd_config
+# Below match is used to test multiple auth method
+Match Group multi-auth
+  AuthenticationMethods publickey,password
+EOF
+EOR
 
 RUN mkdir /var/run/sshd
 
 COPY ssh_host_ed25519_key ssh_host_ed25519_key.pub /etc/ssh/
 COPY authorized_keys /root/.ssh/authorized_keys
+COPY authorized_keys /home/multi-auth/.ssh/authorized_keys
 
 RUN chmod 600 ~/.ssh/authorized_keys
 

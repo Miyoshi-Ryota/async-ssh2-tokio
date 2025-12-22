@@ -1,4 +1,4 @@
-use russh::client::KeyboardInteractiveAuthResponse;
+use russh::client::{AuthResult, KeyboardInteractiveAuthResponse};
 use russh::{
     Channel,
     client::{Config, Handle, Handler, Msg},
@@ -13,11 +13,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 use crate::ToSocketAddrsWithHostname;
+use crate::error::AuthenticationError;
 
 /// An authentification token.
 ///
-/// Used when creating a [`Client`] for authentification.
 /// Supports password, private key, public key, SSH agent, and keyboard interactive authentication.
+/// Used when creating a [`Client`] for authentification.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AuthMethod {
@@ -247,10 +248,10 @@ impl Client {
     pub async fn connect(
         addr: impl ToSocketAddrsWithHostname,
         username: &str,
-        auth: AuthMethod,
+        auths: Vec<AuthMethod>,
         server_check: ServerCheckMethod,
     ) -> Result<Self, crate::Error> {
-        Self::connect_with_config(addr, username, auth, server_check, Config::default()).await
+        Self::connect_with_config(addr, username, auths, server_check, Config::default()).await
     }
 
     /// Same as `connect`, but with the option to specify a non default
@@ -258,7 +259,7 @@ impl Client {
     pub async fn connect_with_config(
         addr: impl ToSocketAddrsWithHostname,
         username: &str,
-        auth: AuthMethod,
+        auths: Vec<AuthMethod>,
         server_check: ServerCheckMethod,
         config: Config,
     ) -> Result<Self, crate::Error> {
@@ -289,7 +290,7 @@ impl Client {
         let (address, mut handle) = connect_res?;
         let username = username.to_string();
 
-        Self::authenticate(&mut handle, &username, auth).await?;
+        Self::authenticate(&mut handle, &username, auths).await?;
 
         Ok(Self {
             connection_handle: Arc::new(handle),
@@ -302,157 +303,251 @@ impl Client {
     async fn authenticate(
         handle: &mut Handle<ClientHandler>,
         username: &String,
-        auth: AuthMethod,
+        auths: Vec<AuthMethod>,
     ) -> Result<(), crate::Error> {
-        match auth {
-            AuthMethod::Password(password) => {
-                let is_authentificated = handle.authenticate_password(username, password).await?;
-                if !is_authentificated.success() {
-                    return Err(crate::Error::PasswordWrong);
+        let mut auth_errors: Vec<AuthenticationError> = Vec::new();
+        for auth in auths {
+            let auth_error = match auth.clone() {
+                AuthMethod::Password(password) => {
+                    Self::auth_password(handle, username, password).await
+                }
+                AuthMethod::PrivateKey { key_data, key_pass } => {
+                    Self::auth_private_key(handle, username, key_data, key_pass).await
+                }
+                AuthMethod::PrivateKeyFile {
+                    key_file_path,
+                    key_pass,
+                } => Self::auth_private_key_file(handle, username, key_file_path, key_pass).await,
+                #[cfg(not(target_os = "windows"))]
+                AuthMethod::PublicKeyFile { key_file_path } => {
+                    Self::auth_public_key_file(handle, username, key_file_path).await
+                }
+                #[cfg(not(target_os = "windows"))]
+                AuthMethod::Agent => Self::auth_agent(handle, username).await,
+                AuthMethod::KeyboardInteractive(kbd) => {
+                    Self::auth_keyboard_interactive(handle, username, kbd).await
+                }
+            };
+            if let Err(error) = auth_error {
+                auth_errors.push(error);
+            } else {
+                return Ok(());
+            }
+        }
+        Err(crate::Error::Authentication(auth_errors))
+    }
+
+    async fn auth_password(
+        handle: &mut Handle<ClientHandler>,
+        username: &String,
+        password: String,
+    ) -> Result<(), AuthenticationError> {
+        let auth_result = handle.authenticate_password(username, password).await?;
+        match auth_result {
+            AuthResult::Success => Ok(()),
+            AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } => Err(AuthenticationError::PasswordWrong {
+                remaining_methods,
+                partial_success,
+            }),
+        }
+    }
+
+    async fn auth_private_key(
+        handle: &mut Handle<ClientHandler>,
+        username: &String,
+        key_data: String,
+        key_pass: Option<String>,
+    ) -> Result<(), AuthenticationError> {
+        let cprivk = russh::keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
+            .map_err(AuthenticationError::KeyInvalid)?;
+        let auth_result = handle
+            .authenticate_publickey(
+                username,
+                russh::keys::PrivateKeyWithHashAlg::new(
+                    Arc::new(cprivk),
+                    handle.best_supported_rsa_hash().await?.flatten(),
+                ),
+            )
+            .await?;
+        match auth_result {
+            AuthResult::Success => Ok(()),
+            AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } => Err(AuthenticationError::KeyAuthFailed {
+                remaining_methods,
+                partial_success,
+            }),
+        }
+    }
+
+    async fn auth_private_key_file(
+        handle: &mut Handle<ClientHandler>,
+        username: &String,
+        key_file_path: PathBuf,
+        key_pass: Option<String>,
+    ) -> Result<(), AuthenticationError> {
+        let cprivk = russh::keys::load_secret_key(key_file_path, key_pass.as_deref())
+            .map_err(AuthenticationError::KeyInvalid)?;
+        let auth_result = handle
+            .authenticate_publickey(
+                username,
+                russh::keys::PrivateKeyWithHashAlg::new(
+                    Arc::new(cprivk),
+                    handle.best_supported_rsa_hash().await?.flatten(),
+                ),
+            )
+            .await?;
+        match auth_result {
+            AuthResult::Success => Ok(()),
+            AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } => Err(AuthenticationError::KeyAuthFailed {
+                remaining_methods,
+                partial_success,
+            }),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    async fn auth_public_key_file(
+        handle: &mut Handle<ClientHandler>,
+        username: &String,
+        key_file_path: PathBuf,
+    ) -> Result<(), AuthenticationError> {
+        let cpubk =
+            russh::keys::load_public_key(key_file_path).map_err(AuthenticationError::KeyInvalid)?;
+        let mut agent = russh::keys::agent::client::AgentClient::connect_env()
+            .await
+            .unwrap();
+        let mut auth_identity: Option<russh::keys::PublicKey> = None;
+        for identity in agent
+            .request_identities()
+            .await
+            .map_err(AuthenticationError::KeyInvalid)?
+        {
+            if identity == cpubk {
+                auth_identity = Some(identity.clone());
+                break;
+            }
+        }
+
+        if auth_identity.is_none() {
+            return Err(AuthenticationError::KeyWithoutIdentity);
+        }
+
+        let auth_result = handle
+            .authenticate_publickey_with(
+                username,
+                cpubk,
+                handle.best_supported_rsa_hash().await?.flatten(),
+                &mut agent,
+            )
+            .await?;
+        match auth_result {
+            AuthResult::Success => Ok(()),
+            AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } => Err(AuthenticationError::KeyAuthFailed {
+                remaining_methods,
+                partial_success,
+            }),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    async fn auth_agent(
+        handle: &mut Handle<ClientHandler>,
+        username: &String,
+    ) -> Result<(), AuthenticationError> {
+        let mut agent = russh::keys::agent::client::AgentClient::connect_env()
+            .await
+            .map_err(|_| AuthenticationError::AgentConnectionFailed)?;
+
+        let identities = agent
+            .request_identities()
+            .await
+            .map_err(|_| AuthenticationError::AgentRequestIdentitiesFailed)?;
+
+        let mut last_auth = None;
+        for identity in identities {
+            let result = handle
+                .authenticate_publickey_with(
+                    username,
+                    identity.clone(),
+                    handle.best_supported_rsa_hash().await?.flatten(),
+                    &mut agent,
+                )
+                .await;
+            if let Ok(auth_result) = result {
+                let is_success = auth_result.success();
+                last_auth = Some(auth_result);
+                if is_success {
+                    break;
                 }
             }
-            AuthMethod::PrivateKey { key_data, key_pass } => {
-                let cprivk = russh::keys::decode_secret_key(key_data.as_str(), key_pass.as_deref())
-                    .map_err(crate::Error::KeyInvalid)?;
-                let is_authentificated = handle
-                    .authenticate_publickey(
-                        username,
-                        russh::keys::PrivateKeyWithHashAlg::new(
-                            Arc::new(cprivk),
-                            handle.best_supported_rsa_hash().await?.flatten(),
-                        ),
-                    )
-                    .await?;
-                if !is_authentificated.success() {
-                    return Err(crate::Error::KeyAuthFailed);
+        }
+
+        match last_auth {
+            Some(AuthResult::Success) => Ok(()),
+            Some(AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            }) => Err(AuthenticationError::AgentAuthenticationFailed {
+                remaining_methods,
+                partial_success,
+            }),
+            None => Err(AuthenticationError::AgentNoIdentities),
+        }
+    }
+
+    async fn auth_keyboard_interactive(
+        handle: &mut Handle<ClientHandler>,
+        username: &String,
+        mut kbd: AuthKeyboardInteractive,
+    ) -> Result<(), AuthenticationError> {
+        let mut res = handle
+            .authenticate_keyboard_interactive_start(username, kbd.submethods)
+            .await?;
+        loop {
+            let prompts = match res {
+                KeyboardInteractiveAuthResponse::Success => break,
+                KeyboardInteractiveAuthResponse::Failure {
+                    remaining_methods,
+                    partial_success,
+                } => {
+                    return Err(AuthenticationError::KeyboardInteractiveAuthFailed {
+                        remaining_methods,
+                        partial_success,
+                    });
                 }
+                KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
+            };
+
+            let mut responses = vec![];
+            for prompt in prompts {
+                let Some(pos) = kbd
+                    .responses
+                    .iter()
+                    .position(|pr| pr.matches(&prompt.prompt))
+                else {
+                    return Err(AuthenticationError::KeyboardInteractiveNoResponseForPrompt(
+                        prompt.prompt,
+                    ));
+                };
+                let pr = kbd.responses.remove(pos);
+                responses.push(pr.response);
             }
-            AuthMethod::PrivateKeyFile {
-                key_file_path,
-                key_pass,
-            } => {
-                let cprivk = russh::keys::load_secret_key(key_file_path, key_pass.as_deref())
-                    .map_err(crate::Error::KeyInvalid)?;
-                let is_authentificated = handle
-                    .authenticate_publickey(
-                        username,
-                        russh::keys::PrivateKeyWithHashAlg::new(
-                            Arc::new(cprivk),
-                            handle.best_supported_rsa_hash().await?.flatten(),
-                        ),
-                    )
-                    .await?;
-                if !is_authentificated.success() {
-                    return Err(crate::Error::KeyAuthFailed);
-                }
-            }
-            #[cfg(not(target_os = "windows"))]
-            AuthMethod::PublicKeyFile { key_file_path } => {
-                let cpubk = russh::keys::load_public_key(key_file_path)
-                    .map_err(crate::Error::KeyInvalid)?;
-                let mut agent = russh::keys::agent::client::AgentClient::connect_env()
-                    .await
-                    .unwrap();
-                let mut auth_identity: Option<russh::keys::PublicKey> = None;
-                for identity in agent
-                    .request_identities()
-                    .await
-                    .map_err(crate::Error::KeyInvalid)?
-                {
-                    if identity == cpubk {
-                        auth_identity = Some(identity.clone());
-                        break;
-                    }
-                }
 
-                if auth_identity.is_none() {
-                    return Err(crate::Error::KeyAuthFailed);
-                }
-
-                let is_authentificated = handle
-                    .authenticate_publickey_with(
-                        username,
-                        cpubk,
-                        handle.best_supported_rsa_hash().await?.flatten(),
-                        &mut agent,
-                    )
-                    .await?;
-                if !is_authentificated.success() {
-                    return Err(crate::Error::KeyAuthFailed);
-                }
-            }
-            #[cfg(not(target_os = "windows"))]
-            AuthMethod::Agent => {
-                let mut agent = russh::keys::agent::client::AgentClient::connect_env()
-                    .await
-                    .map_err(|_| crate::Error::AgentConnectionFailed)?;
-
-                let identities = agent
-                    .request_identities()
-                    .await
-                    .map_err(|_| crate::Error::AgentRequestIdentitiesFailed)?;
-
-                if identities.is_empty() {
-                    return Err(crate::Error::AgentNoIdentities);
-                }
-
-                let mut auth_success = false;
-                for identity in identities {
-                    let result = handle
-                        .authenticate_publickey_with(
-                            username,
-                            identity.clone(),
-                            handle.best_supported_rsa_hash().await?.flatten(),
-                            &mut agent,
-                        )
-                        .await;
-
-                    if let Ok(auth_result) = result
-                        && auth_result.success()
-                    {
-                        auth_success = true;
-                        break;
-                    }
-                }
-
-                if !auth_success {
-                    return Err(crate::Error::AgentAuthenticationFailed);
-                }
-            }
-            AuthMethod::KeyboardInteractive(mut kbd) => {
-                let mut res = handle
-                    .authenticate_keyboard_interactive_start(username, kbd.submethods)
-                    .await?;
-                loop {
-                    let prompts = match res {
-                        KeyboardInteractiveAuthResponse::Success => break,
-                        KeyboardInteractiveAuthResponse::Failure { .. } => {
-                            return Err(crate::Error::KeyboardInteractiveAuthFailed);
-                        }
-                        KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
-                    };
-
-                    let mut responses = vec![];
-                    for prompt in prompts {
-                        let Some(pos) = kbd
-                            .responses
-                            .iter()
-                            .position(|pr| pr.matches(&prompt.prompt))
-                        else {
-                            return Err(crate::Error::KeyboardInteractiveNoResponseForPrompt(
-                                prompt.prompt,
-                            ));
-                        };
-                        let pr = kbd.responses.remove(pos);
-                        responses.push(pr.response);
-                    }
-
-                    res = handle
-                        .authenticate_keyboard_interactive_respond(responses)
-                        .await?;
-                }
-            }
-        };
+            res = handle
+                .authenticate_keyboard_interactive_respond(responses)
+                .await?;
+        }
         Ok(())
     }
 
@@ -1006,6 +1101,8 @@ mod tests {
     use crate::client::*;
     use core::time;
     use dotenv::dotenv;
+    use russh::{MethodKind, MethodSet};
+    use std::panic;
     use std::path::Path;
     use std::sync::Once;
     use tokio::io::AsyncReadExt;
@@ -1068,7 +1165,7 @@ mod tests {
                 env("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
             ),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
             ServerCheckMethod::NoCheck,
         )
         .await
@@ -1293,7 +1390,7 @@ mod tests {
         let client = Client::connect(
             &[SocketAddr::from(([127, 0, 0, 1], 23)), test_address()][..],
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
             ServerCheckMethod::NoCheck,
         )
         .await
@@ -1307,14 +1404,26 @@ mod tests {
         let error = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password("hopefully the wrong password"),
+            vec![AuthMethod::with_password("hopefully the wrong password")],
             ServerCheckMethod::NoCheck,
         )
         .await
         .expect_err("Client connected with wrong password");
 
         match error {
-            crate::Error::PasswordWrong => {}
+            crate::Error::Authentication(mut errors) => {
+                assert_eq!(errors.len(), 1);
+                let error = errors.pop().expect("Must contain an entry");
+                match error {
+                    AuthenticationError::PasswordWrong {
+                        remaining_methods: _,
+                        partial_success,
+                    } => {
+                        assert!(!partial_success);
+                    }
+                    _ => panic!("Wrong AuthenticationError type"),
+                }
+            }
             _ => panic!("Wrong error type"),
         }
     }
@@ -1324,7 +1433,7 @@ mod tests {
         let no_client = Client::connect(
             "this is definitely not an address",
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password("hopefully the wrong password"),
+            vec![AuthMethod::with_password("hopefully the wrong password")],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1336,7 +1445,7 @@ mod tests {
         let no_client = Client::connect(
             (env("ASYNC_SSH2_TEST_HOST_IP"), 23),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1349,7 +1458,7 @@ mod tests {
         let no_client = Client::connect(
             "172.16.0.6:22",
             "xxx",
-            AuthMethod::with_password("xxx"),
+            vec![AuthMethod::with_password("xxx")],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1361,7 +1470,10 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_key_file(env("ASYNC_SSH2_TEST_CLIENT_PRIV"), None),
+            vec![AuthMethod::with_key_file(
+                env("ASYNC_SSH2_TEST_CLIENT_PRIV"),
+                None,
+            )],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1376,7 +1488,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_agent(),
+            vec![AuthMethod::with_agent()],
             ServerCheckMethod::NoCheck,
         )
         .await
@@ -1394,16 +1506,28 @@ mod tests {
         let result = Client::connect(
             test_address(),
             "wrong_user_that_does_not_exist",
-            AuthMethod::with_agent(),
+            vec![AuthMethod::with_agent()],
             ServerCheckMethod::NoCheck,
         )
         .await;
 
         // Should fail with authentication error
-        assert!(matches!(
-            result,
-            Err(crate::Error::AgentAuthenticationFailed)
-        ));
+        match result {
+            Err(crate::Error::Authentication(mut errors)) => {
+                assert_eq!(errors.len(), 1);
+                let error = errors.pop().expect("Must contain an entry");
+                match error {
+                    AuthenticationError::AgentAuthenticationFailed {
+                        remaining_methods: _,
+                        partial_success,
+                    } => {
+                        assert!(!partial_success);
+                    }
+                    _ => panic!("Wrong AuthenticationError type"),
+                }
+            }
+            _ => panic!("Wrong error type"),
+        }
     }
 
     #[tokio::test]
@@ -1419,7 +1543,7 @@ mod tests {
         let result = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_agent(),
+            vec![AuthMethod::with_agent()],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1432,7 +1556,14 @@ mod tests {
         }
 
         // Should fail with connection error
-        assert!(matches!(result, Err(crate::Error::AgentConnectionFailed)));
+        match result {
+            Err(crate::Error::Authentication(mut errors)) => {
+                assert_eq!(errors.len(), 1);
+                let error = errors.pop().expect("Must contain an entry");
+                assert!(matches!(error, AuthenticationError::AgentConnectionFailed));
+            }
+            _ => panic!("Wrong error type"),
+        }
     }
 
     #[tokio::test]
@@ -1440,10 +1571,10 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_key_file(
+            vec![AuthMethod::with_key_file(
                 env("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV"),
                 Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS")),
-            ),
+            )],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1461,7 +1592,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_key(key.as_str(), None),
+            vec![AuthMethod::with_key(key.as_str(), None)],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1475,7 +1606,10 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_key(key.as_str(), Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS"))),
+            vec![AuthMethod::with_key(
+                key.as_str(),
+                Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS")),
+            )],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1487,9 +1621,11 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthKeyboardInteractive::new()
-                .with_response("Password", env("ASYNC_SSH2_TEST_HOST_PW"))
-                .into(),
+            vec![
+                AuthKeyboardInteractive::new()
+                    .with_response("Password", env("ASYNC_SSH2_TEST_HOST_PW"))
+                    .into(),
+            ],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1501,9 +1637,11 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthKeyboardInteractive::new()
-                .with_response_exact("Password: ", env("ASYNC_SSH2_TEST_HOST_PW"))
-                .into(),
+            vec![
+                AuthKeyboardInteractive::new()
+                    .with_response_exact("Password: ", env("ASYNC_SSH2_TEST_HOST_PW"))
+                    .into(),
+            ],
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1515,18 +1653,29 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthKeyboardInteractive::new()
-                .with_response_exact("Password: ", "wrong password")
-                .into(),
+            vec![
+                AuthKeyboardInteractive::new()
+                    .with_response_exact("Password: ", "wrong password")
+                    .into(),
+            ],
             ServerCheckMethod::NoCheck,
         )
         .await;
         match client {
-            Err(crate::error::Error::KeyboardInteractiveAuthFailed) => {}
-            Err(e) => {
-                panic!("Expected KeyboardInteractiveAuthFailed error. Got error: {e:?}")
+            Err(crate::Error::Authentication(mut errors)) => {
+                assert_eq!(errors.len(), 1);
+                let error = errors.pop().expect("Must contain an entry");
+                match error {
+                    AuthenticationError::KeyboardInteractiveAuthFailed {
+                        remaining_methods: _,
+                        partial_success,
+                    } => {
+                        assert!(!partial_success);
+                    }
+                    _ => panic!("Wrong AuthenticationError type"),
+                }
             }
-            Ok(_) => panic!("Expected KeyboardInteractiveAuthFailed error."),
+            _ => panic!("Expected Authentication error."),
         }
     }
 
@@ -1535,20 +1684,120 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthKeyboardInteractive::new()
-                .with_response_exact("Password:", "123")
-                .into(),
+            vec![
+                AuthKeyboardInteractive::new()
+                    .with_response_exact("Password:", "123")
+                    .into(),
+            ],
             ServerCheckMethod::NoCheck,
         )
         .await;
         match client {
-            Err(crate::error::Error::KeyboardInteractiveNoResponseForPrompt(prompt)) => {
-                assert_eq!(prompt, "Password: ");
+            Err(crate::Error::Authentication(mut errors)) => {
+                assert_eq!(errors.len(), 1);
+                let error = errors.pop().expect("Must contain an entry");
+                match error {
+                    AuthenticationError::KeyboardInteractiveNoResponseForPrompt(prompt) => {
+                        assert_eq!(prompt, "Password: ");
+                    }
+                    e => panic!(
+                        "Expected KeyboardInteractiveNoResponseForPrompt error. Got error: {e:?}"
+                    ),
+                }
+            }
+            _ => panic!("Expected KeyboardInteractiveNoResponseForPrompt error."),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_auth_password_key_without_key() {
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER_MULTI_AUTH"),
+            vec![AuthMethod::with_password(&env(
+                "ASYNC_SSH2_TEST_HOST_PW_MULTI_AUTH",
+            ))],
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        match client {
+            Err(crate::error::Error::Authentication(mut errors)) => {
+                assert_eq!(errors.len(), 1);
+                let error = errors.pop().unwrap();
+                match error {
+                    AuthenticationError::PasswordWrong {
+                        remaining_methods,
+                        partial_success,
+                    } => {
+                        assert!(
+                            !partial_success,
+                            "We must have the PublicKey method first, so partial_success must be false",
+                        );
+                        let mut expected_method_set = MethodSet::empty();
+                        expected_method_set.push(MethodKind::PublicKey);
+                        assert_eq!(remaining_methods, expected_method_set);
+                    }
+                    _ => panic!("Wrong AuthenticationError type"),
+                }
+            }
+            _ => panic!("Expected Authentication error."),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_auth_password_key_without_password() {
+        let key = std::fs::read_to_string(env("ASYNC_SSH2_TEST_CLIENT_PRIV")).unwrap();
+
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER_MULTI_AUTH"),
+            vec![AuthMethod::with_key(key.as_str(), None)],
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        match client {
+            Err(crate::error::Error::Authentication(mut errors)) => {
+                assert_eq!(errors.len(), 1);
+                let error = errors.pop().unwrap();
+                match error {
+                    AuthenticationError::KeyAuthFailed {
+                        remaining_methods,
+                        partial_success,
+                    } => {
+                        assert!(
+                            partial_success,
+                            "We have the PublicKey method first, so partial_success must be true",
+                        );
+                        let mut expected_method_set = MethodSet::empty();
+                        expected_method_set.push(MethodKind::Password);
+                        assert_eq!(remaining_methods, expected_method_set);
+                    }
+                    _ => panic!("Wrong AuthenticationError type"),
+                }
             }
             Err(e) => {
-                panic!("Expected KeyboardInteractiveNoResponseForPrompt error. Got error: {e:?}")
+                panic!("Expected Authentication error. Got error: {e:?}")
             }
-            Ok(_) => panic!("Expected KeyboardInteractiveNoResponseForPrompt error."),
+            Ok(_) => panic!("Expected Authentication error."),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_auth_password_key() {
+        let key = std::fs::read_to_string(env("ASYNC_SSH2_TEST_CLIENT_PRIV")).unwrap();
+
+        let client = Client::connect(
+            test_address(),
+            &env("ASYNC_SSH2_TEST_HOST_USER_MULTI_AUTH"),
+            vec![
+                AuthMethod::with_key(key.as_str(), None),
+                AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW_MULTI_AUTH")),
+            ],
+            ServerCheckMethod::NoCheck,
+        )
+        .await;
+        if let Err(e) = client {
+            panic!("Unexpected error: {e:?}");
         }
     }
 
@@ -1557,7 +1806,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
             ServerCheckMethod::with_public_key_file(&env("ASYNC_SSH2_TEST_SERVER_PUB")),
         )
         .await;
@@ -1577,7 +1826,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
             ServerCheckMethod::with_public_key(key),
         )
         .await;
@@ -1589,7 +1838,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
             ServerCheckMethod::with_known_hosts_file(&env("ASYNC_SSH2_TEST_KNOWN_HOSTS")),
         )
         .await;
@@ -1601,7 +1850,7 @@ mod tests {
         let client = Client::connect(
             test_hostname(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
             ServerCheckMethod::with_known_hosts_file(&env("ASYNC_SSH2_TEST_KNOWN_HOSTS")),
         )
         .await;

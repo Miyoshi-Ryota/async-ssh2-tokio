@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This script runs another instance of sshd in verbose debug mode on port 2222
 # for debugging SSH connections. It does not use the system's host key.
