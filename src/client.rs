@@ -298,6 +298,75 @@ impl Client {
         })
     }
 
+    /// Open a connection to a remote host via an existing connection. Can be
+    /// used for Proxy Jumping to hosts that are only accessible from a
+    /// different remote host.
+    pub async fn connect_via(
+        via: &Client,
+        addr: impl ToSocketAddrsWithHostname,
+        username: &str,
+        auth: AuthMethod,
+        server_check: ServerCheckMethod,
+    ) -> Result<Self, crate::Error> {
+        Self::connect_via_with_config(via, addr, username, auth, server_check, Config::default())
+            .await
+    }
+
+    /// Same as `connect_via`, but with the option to specify a non default
+    /// [`russh::client::Config`].
+    pub async fn connect_via_with_config(
+        via: &Client,
+        addr: impl ToSocketAddrsWithHostname,
+        username: &str,
+        auth: AuthMethod,
+        server_check: ServerCheckMethod,
+        config: Config,
+    ) -> Result<Self, crate::Error> {
+        let config = Arc::new(config);
+
+        let socket_addrs = addr
+            .to_socket_addrs()
+            .map_err(crate::Error::AddressInvalid)?;
+        let username = username.to_string();
+        let mut connect_res = Err(crate::Error::AddressInvalid(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "could not resolve to any addresses",
+        )));
+
+        for socket_addr in socket_addrs {
+            let channel = match via.open_direct_tcpip_channel(socket_addr, None).await {
+                Ok(channel) => channel,
+                Err(e) => {
+                    connect_res = Err(e);
+                    continue;
+                }
+            };
+
+            let handler = ClientHandler {
+                hostname: addr.hostname(),
+                host: socket_addr,
+                server_check: server_check.clone(),
+            };
+
+            match russh::client::connect_stream(config.clone(), channel.into_stream(), handler)
+                .await
+            {
+                Ok(mut handle) => {
+                    Self::authenticate(&mut handle, &username, auth).await?;
+
+                    return Ok(Self {
+                        connection_handle: Arc::new(handle),
+                        username,
+                        address: socket_addr,
+                    });
+                }
+                Err(e) => connect_res = Err(e),
+            }
+        }
+
+        connect_res
+    }
+
     /// This takes a handle and performs authentification with the given method.
     async fn authenticate(
         handle: &mut Handle<ClientHandler>,
@@ -1008,6 +1077,7 @@ mod tests {
     use dotenv::dotenv;
     use std::path::Path;
     use std::sync::Once;
+
     use tokio::io::AsyncReadExt;
     static INIT: Once = Once::new();
 
