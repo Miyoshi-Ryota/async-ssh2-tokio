@@ -1316,6 +1316,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connect_via_existing_client() {
+        let client_1 = establish_test_host_connection().await;
+        let client_2 = Client::connect_via(
+            &client_1,
+            format!(
+                "{}:{}",
+                env("ASYNC_SSH2_TEST_SSH_SERVER_2_IP"),
+                env("ASYNC_SSH2_TEST_SSH_SERVER_2_PORT"),
+            ),
+            &client_1.username,
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::NoCheck,
+        )
+        .await
+        .unwrap();
+
+        // Check hostnames to ensure we've connected to the expected places
+        assert_eq!(
+            "ssh-server",
+            client_1.execute("hostname").await.unwrap().stdout.trim()
+        );
+        assert_eq!(
+            "ssh-server-2",
+            client_2.execute("hostname").await.unwrap().stdout.trim()
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_via_existing_client_multiple_addresses() {
+        let client_1 = establish_test_host_connection().await;
+        Client::connect_via(
+            &client_1,
+            vec![
+                // First address in invalid and should fail
+                SocketAddr::from(([10, 0, 0, 0], 22)),
+                // Should still be able to connect via the second
+                format!(
+                    "{}:{}",
+                    env("ASYNC_SSH2_TEST_SSH_SERVER_2_IP"),
+                    env("ASYNC_SSH2_TEST_SSH_SERVER_2_PORT"),
+                )
+                .parse()
+                .unwrap(),
+            ]
+            .as_slice(),
+            &client_1.username,
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
+            ServerCheckMethod::NoCheck,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn stderr_redirection() {
         let client = establish_test_host_connection().await;
 

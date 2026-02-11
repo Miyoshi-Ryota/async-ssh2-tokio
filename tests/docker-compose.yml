@@ -1,6 +1,7 @@
 ---
 services:
   ssh-server:
+    hostname: ssh-server
     platform: linux/amd64
     build:
       context: ./sshd-test
@@ -8,6 +9,16 @@ services:
     networks:
       ssh-network:
         ipv4_address: 10.10.10.2
+  # Used for `connect_via` proxy jumping tests
+  ssh-server-2:
+    hostname: ssh-server-2
+    platform: linux/amd64
+    build:
+      context: ./sshd-test
+    container_name: ssh-server-2
+    networks:
+      ssh-network:
+        ipv4_address: 10.10.10.5
   # The HTTP server is used for the `direct-tcpip` channel test.
   http-server:
     image: python:alpine
@@ -29,6 +40,7 @@ services:
         ipv4_address: 10.10.10.3
     depends_on:
       - ssh-server
+      - ssh-server-2
       - http-server
 networks:
   ssh-network:
