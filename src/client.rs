@@ -3,7 +3,10 @@ use russh::{
     Channel,
     client::{Config, Handle, Handler, Msg},
 };
-use russh_sftp::{client::SftpSession, protocol::OpenFlags};
+use russh_sftp::{
+    client::{Config as SftpConfig, SftpSession},
+    protocol::OpenFlags,
+};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -359,8 +362,8 @@ impl Client {
                     .await
                     .map_err(crate::Error::KeyInvalid)?
                 {
-                    if identity == cpubk {
-                        auth_identity = Some(identity.clone());
+                    if *identity.public_key() == cpubk {
+                        auth_identity = Some(identity.public_key().into_owned());
                         break;
                     }
                 }
@@ -401,7 +404,7 @@ impl Client {
                     let result = handle
                         .authenticate_publickey_with(
                             username,
-                            identity.clone(),
+                            identity.public_key().into_owned(),
                             handle.best_supported_rsa_hash().await?.flatten(),
                             &mut agent,
                         )
@@ -533,7 +536,18 @@ impl Client {
         // start sftp session
         let channel = self.get_channel().await?;
         channel.request_subsystem(true, "sftp").await?;
-        let sftp = SftpSession::new_opts(channel.into_stream(), timeout_seconds).await?;
+        let sftp = if let Some(secs) = timeout_seconds {
+            SftpSession::new_with_config(
+                channel.into_stream(),
+                SftpConfig {
+                    request_timeout_secs: secs,
+                    ..SftpConfig::default()
+                },
+            )
+            .await?
+        } else {
+            SftpSession::new(channel.into_stream()).await?
+        };
 
         let file_size = tokio::fs::metadata(&src_file_path).await?.len();
         // read file contents locally
