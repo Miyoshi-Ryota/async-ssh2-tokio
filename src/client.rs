@@ -3,7 +3,10 @@ use russh::{
     Channel,
     client::{Config, Handle, Handler, Msg},
 };
-use russh_sftp::{client::SftpSession, protocol::OpenFlags};
+use russh_sftp::{
+    client::{Config as SftpConfig, SftpSession},
+    protocol::OpenFlags,
+};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -533,7 +536,11 @@ impl Client {
         // start sftp session
         let channel = self.get_channel().await?;
         channel.request_subsystem(true, "sftp").await?;
-        let sftp = SftpSession::new_opts(channel.into_stream(), timeout_seconds).await?;
+        let mut sftp_config = SftpConfig::default();
+        if let Some(timeout_seconds) = timeout_seconds {
+            sftp_config.request_timeout_secs = timeout_seconds;
+        }
+        let sftp = SftpSession::new_with_config(channel.into_stream(), sftp_config).await?;
 
         let file_size = tokio::fs::metadata(&src_file_path).await?.len();
         // read file contents locally
