@@ -16,7 +16,7 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 openssl = []
 
 [dependencies]
-russh = { version = "0.61.1", default-features = false, features = [
+russh = { version = "0.62.1", default-features = false, features = [
     "rsa",
     "flate2",
     "ring",
