@@ -16,11 +16,16 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 openssl = []
 
 [dependencies]
-russh = { version = "0.55.0", default-features = false, features = ["rsa", "flate2", "ring"] }
+russh = { version = "0.62.1", default-features = false, features = [
+    "rsa",
+    "flate2",
+    "ring",
+] }
 log = "0.4"
-russh-sftp = "2.1.1"
+russh-sftp = "2.3.0"
 thiserror = "2.0.17"
-tokio = { version = "1.45.1", features = ["fs"] }
+tokio = { version = "1.52.3", features = ["fs"] }
+
 
 [dev-dependencies]
 dotenv = "0.15.0"
