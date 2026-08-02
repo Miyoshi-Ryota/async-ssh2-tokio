@@ -13,13 +13,14 @@ authors = ["Miyoshi-Ryota <m1yosh1.ry0t4@gmail.com>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-openssl = []
+default = ["aws-lc-rs"]
+aws-lc-rs = ["russh/aws-lc-rs"]
+ring = ["russh/ring"]
 
 [dependencies]
 russh = { version = "0.62.1", default-features = false, features = [
     "rsa",
     "flate2",
-    "ring",
 ] }
 log = "0.4"
 russh-sftp = "2.3.0"
