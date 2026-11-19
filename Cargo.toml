@@ -18,7 +18,7 @@ aws-lc-rs = ["russh/aws-lc-rs"]
 ring = ["russh/ring"]
 
 [dependencies]
-russh = { version = "0.62.1", default-features = false, features = [
+russh = { version = "0.65.2", default-features = false, features = [
     "rsa",
     "flate2",
 ] }
