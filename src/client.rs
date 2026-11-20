@@ -431,7 +431,7 @@ impl Client {
                     .await
                     .map_err(crate::Error::KeyInvalid)?
                 {
-                    if *identity.public_key() == cpubk {
+                    if identity.public_key().key_data() == cpubk.key_data() {
                         auth_identity = Some(identity.public_key().into_owned());
                         break;
                     }
@@ -1041,44 +1041,34 @@ impl Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        match &self.server_check {
-            ServerCheckMethod::NoCheck => Ok(true),
-            ServerCheckMethod::PublicKey(key) => {
-                let pk = russh::keys::parse_public_key_base64(key)
-                    .map_err(|_| crate::Error::ServerCheckFailed)?;
+        use russh::keys::PublicKeyOrCertificate::{Certificate, PublicKey};
 
-                Ok(pk == *server_public_key)
+        match (&self.server_check, server_public_key) {
+            (ServerCheckMethod::NoCheck, _) => Ok(true),
+            // The existing verification methods only trust plain host keys.
+            (_, Certificate(_)) => Ok(false),
+            (ServerCheckMethod::PublicKey(key), PublicKey { key: host_key, .. }) => {
+                russh::keys::parse_public_key_base64(key)
+                    .map(|key| key.key_data() == host_key.key_data())
             }
-            ServerCheckMethod::PublicKeyFile(key_file_name) => {
-                let pk = russh::keys::load_public_key(key_file_name)
-                    .map_err(|_| crate::Error::ServerCheckFailed)?;
-
-                Ok(pk == *server_public_key)
+            (ServerCheckMethod::PublicKeyFile(path), PublicKey { key: host_key, .. }) => {
+                russh::keys::load_public_key(path).map(|key| key.key_data() == host_key.key_data())
             }
-            ServerCheckMethod::KnownHostsFile(known_hosts_path) => {
-                let result = russh::keys::check_known_hosts_path(
+            (ServerCheckMethod::KnownHostsFile(path), PublicKey { key: host_key, .. }) => {
+                russh::keys::check_known_hosts_path(
                     &self.hostname,
                     self.host.port(),
-                    server_public_key,
-                    known_hosts_path,
+                    host_key,
+                    path,
                 )
-                .map_err(|_| crate::Error::ServerCheckFailed)?;
-
-                Ok(result)
             }
-            ServerCheckMethod::DefaultKnownHostsFile => {
-                let result = russh::keys::check_known_hosts(
-                    &self.hostname,
-                    self.host.port(),
-                    server_public_key,
-                )
-                .map_err(|_| crate::Error::ServerCheckFailed)?;
-
-                Ok(result)
+            (ServerCheckMethod::DefaultKnownHostsFile, PublicKey { key: host_key, .. }) => {
+                russh::keys::check_known_hosts(&self.hostname, self.host.port(), host_key)
             }
         }
+        .map_err(|_| crate::Error::ServerCheckFailed)
     }
 }
 
